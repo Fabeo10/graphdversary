@@ -1,0 +1,62 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Packaging / install metadata
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Tooling & test caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Environment and secrets (do not commit API keys)
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors (uncomment if you do not want these in the repo)
+# .idea/
+# .vscode/
+
+# Local ML / model caches (if you ever download into the project)
+.cache/
+models/
+*.pt
+*.pth
+*.onnx
+
+# Jupyter
+.ipynb_checkpoints/
