@@ -1,0 +1,45 @@
+{
+    "entities": [
+      {
+        "id": "n1",
+        "content": "Authentication Service: Manages user login requests.",
+        "type": "Service"
+      },
+      {
+        "id": "n2",
+        "content": "User Database: Stores hashed user credentials.",
+        "type": "Database"
+      },
+      {
+        "id": "n3",
+        "content": "JWT Validator: Cryptographically verifies token signatures.",
+        "type": "Component"
+      },
+      {
+        "id": "n4",
+        "content": "Rate Limiter: Prevents brute force login attempts.",
+        "type": "Middleware"
+      }
+    ],
+    "edges": [
+      {
+        "source": "n1",
+        "target": "n3",
+        "relation": "USES"
+      },
+      {
+        "source": "n1",
+        "target": "n2",
+        "relation": "QUERIES"
+      },
+      {
+        "source": "n1",
+        "target": "n4",
+        "relation": "TRIGGERED_BY"
+      }
+    ],
+    "metadata": {
+      "ground_truth_nodes": ["n1", "n3"],
+      "test_query": "How does the Authentication Service verify tokens?"
+    }
+  }
