@@ -13,6 +13,7 @@ if str(PROJECT_ROOT_FOR_IMPORTS) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_FOR_IMPORTS))
 
 from src.pipeline import DEFAULT_SCENARIO_PATH, PROJECT_ROOT, load_scenario, run_scenario
+from src.agent_duel import run_agent_duel
 from src.scenario_assertions import evaluate_expectations
 
 
@@ -323,6 +324,10 @@ def edge_pairs(snapshot):
     return {(edge["source"], edge["target"]) for edge in snapshot["edges"]}
 
 
+def session_key(scenario, suffix):
+    return f"{scenario.get('id', 'scenario')}-{suffix}"
+
+
 def context_panel(title, run_result):
     st.subheader(title)
     st.caption(f"Query: {run_result['query']}")
@@ -361,6 +366,82 @@ def expectation_panel(result):
 
     with st.expander("Ground truth vs. outcome checks", expanded=False):
         st.dataframe(expectation_result["checks"], width="stretch", hide_index=True)
+
+
+def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defenses, mock_answer, show_edge_labels):
+    st.header("Agent Duel")
+    st.caption(
+        "Run a constrained red-team / blue-team duel. Agents can only select scenario-approved actions; they never execute code or mutate the graph directly."
+    )
+
+    mode = st.radio("Agent mode", ["Rule-based", "Hybrid Ollama"], horizontal=True)
+    ollama_model = "qwen2.5:3b"
+    if mode == "Hybrid Ollama":
+        ollama_model = st.text_input("Ollama model", value=ollama_model)
+        st.caption("If Ollama is not running, the duel automatically falls back to rule-based rationales.")
+
+    max_turns = max(len(attacks), len(defenses))
+    turn_key = session_key(scenario, "duel-turns")
+    if turn_key not in st.session_state:
+        st.session_state[turn_key] = 0
+
+    controls = st.columns(3)
+    with controls[0]:
+        if st.button("Run one duel turn", disabled=st.session_state[turn_key] >= max_turns):
+            st.session_state[turn_key] = min(st.session_state[turn_key] + 1, max_turns)
+    with controls[1]:
+        if st.button("Run full duel", disabled=max_turns == 0):
+            st.session_state[turn_key] = max_turns
+    with controls[2]:
+        if st.button("Reset duel"):
+            st.session_state[turn_key] = 0
+
+    duel = run_agent_duel(
+        scenario_path=str(selected),
+        query=query,
+        top_k=top_k,
+        hop_depth=hop_depth,
+        attacks=scenario.get("attacks", []),
+        defenses=scenario.get("defenses", []),
+        mock_answer=mock_answer,
+        turns=st.session_state[turn_key],
+        mode=mode,
+        ollama_model=ollama_model,
+    )
+    duel_result = duel["result"]
+    st.progress(duel["turns"] / duel["max_turns"] if duel["max_turns"] else 0.0)
+    st.caption(f"Duel progress: {duel['turns']} / {duel['max_turns']} turns")
+
+    duel_cols = st.columns([1.2, 1])
+    with duel_cols[0]:
+        duel_removed_edges = {
+            (attack["source"], attack["target"])
+            for attack in duel_result["attacks"]
+            if attack["type"] == "remove_edge" and attack["success"]
+        } - edge_pairs(duel_result["defended_graph"])
+        st.plotly_chart(
+            build_graph_figure(
+                duel_result["defended_graph"],
+                "Duel graph",
+                removed_edges=duel_removed_edges,
+                ground_truth_nodes=duel_result["scenario"].get("ground_truth_nodes", []),
+                retrieved_nodes=duel_result["defended"]["nodes"],
+                show_edge_labels=show_edge_labels,
+            ),
+            width="stretch",
+        )
+    with duel_cols[1]:
+        st.subheader("Duel Scoreboard")
+        st.metric("Attack recall", f"{duel_result['adversarial']['metrics']['recall']:.2f}")
+        st.metric("Defended recall", f"{duel_result['defended']['metrics']['recall']:.2f}")
+        st.metric("Attack poison", f"{duel_result['poison_exposure']['score']:.2f}")
+        st.metric("Defended poison", f"{duel_result['defended_poison_exposure']['score']:.2f}")
+
+    st.subheader("Agent Interaction Log")
+    if duel["log"]:
+        st.dataframe(duel["log"], width="stretch", hide_index=True)
+    else:
+        st.info("Run one duel turn to generate the first red/blue interaction.")
 
 
 def main():
@@ -453,6 +534,7 @@ def main():
 
     outcome_panel(result)
     expectation_panel(result)
+    agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defenses, mock_answer, show_edge_labels)
 
     live_removed_edges = removed_edges - edge_pairs(result["defended_graph"])
     st.header("Realtime Interaction Graph")
