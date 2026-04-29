@@ -4,6 +4,7 @@ Interactive Streamlit demo for graphdversary.
 
 from pathlib import Path
 import sys
+import time
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -13,7 +14,7 @@ if str(PROJECT_ROOT_FOR_IMPORTS) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_FOR_IMPORTS))
 
 from src.pipeline import DEFAULT_SCENARIO_PATH, PROJECT_ROOT, load_scenario, run_scenario
-from src.agent_duel import run_agent_duel
+from src.agent_duel import run_agent_duel_steps
 from src.scenario_assertions import evaluate_expectations
 
 
@@ -380,23 +381,31 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         ollama_model = st.text_input("Ollama model", value=ollama_model)
         st.caption("If Ollama is not running, the duel automatically falls back to rule-based rationales.")
 
-    max_turns = max(len(attacks), len(defenses))
-    turn_key = session_key(scenario, "duel-turns")
-    if turn_key not in st.session_state:
-        st.session_state[turn_key] = 0
+    max_steps = len(attacks) + len(defenses)
+    step_key = session_key(scenario, "duel-steps")
+    autoplay_key = session_key(scenario, "duel-autoplay")
+    if step_key not in st.session_state:
+        st.session_state[step_key] = 0
+    if autoplay_key not in st.session_state:
+        st.session_state[autoplay_key] = False
 
-    controls = st.columns(3)
+    delay_seconds = st.slider("Autoplay delay between agents", min_value=1, max_value=5, value=2)
+    controls = st.columns(4)
     with controls[0]:
-        if st.button("Run one duel turn", disabled=st.session_state[turn_key] >= max_turns):
-            st.session_state[turn_key] = min(st.session_state[turn_key] + 1, max_turns)
+        if st.button("Run next agent", disabled=st.session_state[step_key] >= max_steps):
+            st.session_state[step_key] = min(st.session_state[step_key] + 1, max_steps)
     with controls[1]:
-        if st.button("Run full duel", disabled=max_turns == 0):
-            st.session_state[turn_key] = max_turns
+        if st.button("Run next full turn", disabled=st.session_state[step_key] >= max_steps):
+            st.session_state[step_key] = min(st.session_state[step_key] + 2, max_steps)
     with controls[2]:
+        if st.button("Auto-play duel", disabled=max_steps == 0 or st.session_state[step_key] >= max_steps):
+            st.session_state[autoplay_key] = True
+    with controls[3]:
         if st.button("Reset duel"):
-            st.session_state[turn_key] = 0
+            st.session_state[step_key] = 0
+            st.session_state[autoplay_key] = False
 
-    duel = run_agent_duel(
+    duel = run_agent_duel_steps(
         scenario_path=str(selected),
         query=query,
         top_k=top_k,
@@ -404,13 +413,16 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         attacks=scenario.get("attacks", []),
         defenses=scenario.get("defenses", []),
         mock_answer=mock_answer,
-        turns=st.session_state[turn_key],
+        steps=st.session_state[step_key],
         mode=mode,
         ollama_model=ollama_model,
     )
     duel_result = duel["result"]
-    st.progress(duel["turns"] / duel["max_turns"] if duel["max_turns"] else 0.0)
-    st.caption(f"Duel progress: {duel['turns']} / {duel['max_turns']} turns")
+    st.progress(duel["steps"] / duel["max_steps"] if duel["max_steps"] else 0.0)
+    st.caption(
+        f"Duel progress: {duel['steps']} / {duel['max_steps']} agent actions. "
+        f"Current actor: {duel['current_agent']}."
+    )
 
     duel_cols = st.columns([1.2, 1])
     with duel_cols[0]:
@@ -419,13 +431,25 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
             for attack in duel_result["attacks"]
             if attack["type"] == "remove_edge" and attack["success"]
         } - edge_pairs(duel_result["defended_graph"])
+        if duel["current_agent"] == "red":
+            duel_graph = duel_result["attacked_graph"]
+            duel_retrieval = duel_result["adversarial"]
+            duel_title = "Duel graph after red action"
+        elif duel["current_agent"] == "blue":
+            duel_graph = duel_result["defended_graph"]
+            duel_retrieval = duel_result["defended"]
+            duel_title = "Duel graph after blue response"
+        else:
+            duel_graph = duel_result["baseline_graph"]
+            duel_retrieval = duel_result["baseline"]
+            duel_title = "Duel graph at baseline"
         st.plotly_chart(
             build_graph_figure(
-                duel_result["defended_graph"],
-                "Duel graph",
+                duel_graph,
+                duel_title,
                 removed_edges=duel_removed_edges,
                 ground_truth_nodes=duel_result["scenario"].get("ground_truth_nodes", []),
-                retrieved_nodes=duel_result["defended"]["nodes"],
+                retrieved_nodes=duel_retrieval["nodes"],
                 show_edge_labels=show_edge_labels,
             ),
             width="stretch",
@@ -442,6 +466,13 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         st.dataframe(duel["log"], width="stretch", hide_index=True)
     else:
         st.info("Run one duel turn to generate the first red/blue interaction.")
+
+    if st.session_state[autoplay_key] and st.session_state[step_key] < max_steps:
+        time.sleep(delay_seconds)
+        st.session_state[step_key] = min(st.session_state[step_key] + 1, max_steps)
+        st.rerun()
+    elif st.session_state[autoplay_key]:
+        st.session_state[autoplay_key] = False
 
 
 def main():

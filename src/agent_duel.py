@@ -68,6 +68,112 @@ def explain_action(role, action, result, mode="Rule-based", ollama_model="qwen2.
     return _fallback_rationale(role, action)
 
 
+def duel_events(attacks, defenses):
+    events = []
+    max_turns = max(len(attacks), len(defenses))
+    for index in range(max_turns):
+        if index < len(attacks):
+            events.append({"turn": index + 1, "agent": "red", "index": index})
+        if index < len(defenses):
+            events.append({"turn": index + 1, "agent": "blue", "index": index})
+    return events
+
+
+def _counts_for_events(events):
+    red_count = sum(1 for event in events if event["agent"] == "red")
+    blue_count = sum(1 for event in events if event["agent"] == "blue")
+    return red_count, blue_count
+
+
+def _run_duel_state(scenario_path, query, top_k, hop_depth, attacks, defenses, mock_answer, events):
+    red_count, blue_count = _counts_for_events(events)
+    return run_scenario(
+        scenario_path=scenario_path,
+        query=query,
+        top_k=top_k,
+        hop_depth=hop_depth,
+        attacks=_enabled_prefix(attacks, red_count),
+        defenses=_enabled_prefix(defenses, blue_count),
+        mock_answer=mock_answer,
+        verbose=False,
+    )
+
+
+def run_agent_duel_steps(
+    scenario_path,
+    query,
+    top_k,
+    hop_depth,
+    attacks,
+    defenses,
+    mock_answer,
+    steps,
+    mode="Rule-based",
+    ollama_model="qwen2.5:3b",
+):
+    """Run cumulative one-agent-at-a-time duel steps and return current state."""
+    events = duel_events(attacks, defenses)
+    steps = max(0, min(steps, len(events)))
+    active_events = events[:steps]
+    final_result = _run_duel_state(
+        scenario_path,
+        query,
+        top_k,
+        hop_depth,
+        attacks,
+        defenses,
+        mock_answer,
+        active_events,
+    )
+
+    log = []
+    for index, event in enumerate(active_events):
+        step_events = active_events[:index + 1]
+        step_result = _run_duel_state(
+            scenario_path,
+            query,
+            top_k,
+            hop_depth,
+            attacks,
+            defenses,
+            mock_answer,
+            step_events,
+        )
+        if event["agent"] == "red":
+            action = attacks[event["index"]]
+            log.append({
+                "step": index + 1,
+                "turn": event["turn"],
+                "agent": "red",
+                "action": action.get("label", action.get("type", "attack")),
+                "rationale": explain_action("red", action, step_result, mode, ollama_model),
+                "recall": step_result["adversarial"]["metrics"]["recall"],
+                "poison_exposure": step_result["poison_exposure"]["score"],
+            })
+        else:
+            action = defenses[event["index"]]
+            log.append({
+                "step": index + 1,
+                "turn": event["turn"],
+                "agent": "blue",
+                "action": action.get("label", action.get("type", "defense")),
+                "rationale": explain_action("blue", action, step_result, mode, ollama_model),
+                "recall": step_result["defended"]["metrics"]["recall"],
+                "poison_exposure": step_result["defended_poison_exposure"]["score"],
+            })
+
+    current_event = active_events[-1] if active_events else None
+    return {
+        "steps": steps,
+        "max_steps": len(events),
+        "turns": (steps + 1) // 2,
+        "max_turns": max(len(attacks), len(defenses)),
+        "current_agent": current_event["agent"] if current_event else "baseline",
+        "log": log,
+        "result": final_result,
+    }
+
+
 def run_agent_duel(
     scenario_path,
     query,
@@ -81,60 +187,15 @@ def run_agent_duel(
     ollama_model="qwen2.5:3b",
 ):
     """Run cumulative red/blue turns and return the final result plus a log."""
-    max_turns = max(len(attacks), len(defenses))
-    turns = max(0, min(turns, max_turns))
-    log = []
-    final_result = run_scenario(
+    return run_agent_duel_steps(
         scenario_path=scenario_path,
         query=query,
         top_k=top_k,
         hop_depth=hop_depth,
-        attacks=[],
-        defenses=[],
+        attacks=attacks,
+        defenses=defenses,
         mock_answer=mock_answer,
-        verbose=False,
+        steps=turns * 2,
+        mode=mode,
+        ollama_model=ollama_model,
     )
-
-    for turn in range(1, turns + 1):
-        active_attacks = _enabled_prefix(attacks, turn)
-        active_defenses = _enabled_prefix(defenses, turn)
-        final_result = run_scenario(
-            scenario_path=scenario_path,
-            query=query,
-            top_k=top_k,
-            hop_depth=hop_depth,
-            attacks=active_attacks,
-            defenses=active_defenses,
-            mock_answer=mock_answer,
-            verbose=False,
-        )
-
-        red_action = attacks[turn - 1] if turn <= len(attacks) else None
-        blue_action = defenses[turn - 1] if turn <= len(defenses) else None
-
-        if red_action:
-            log.append({
-                "turn": turn,
-                "agent": "red",
-                "action": red_action.get("label", red_action.get("type", "attack")),
-                "rationale": explain_action("red", red_action, final_result, mode, ollama_model),
-                "recall": final_result["adversarial"]["metrics"]["recall"],
-                "poison_exposure": final_result["poison_exposure"]["score"],
-            })
-
-        if blue_action:
-            log.append({
-                "turn": turn,
-                "agent": "blue",
-                "action": blue_action.get("label", blue_action.get("type", "defense")),
-                "rationale": explain_action("blue", blue_action, final_result, mode, ollama_model),
-                "recall": final_result["defended"]["metrics"]["recall"],
-                "poison_exposure": final_result["defended_poison_exposure"]["score"],
-            })
-
-    return {
-        "turns": turns,
-        "max_turns": max_turns,
-        "log": log,
-        "result": final_result,
-    }
