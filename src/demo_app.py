@@ -92,6 +92,48 @@ def active_labels(items):
     return [item.get("label", item.get("type", "Unnamed")) for item in items if item.get("enabled", True)]
 
 
+def paired_controls(scenario):
+    attacks = []
+    defenses = []
+    scenario_attacks = scenario.get("attacks", [])
+    scenario_defenses = scenario.get("defenses", [])
+    max_steps = max(len(scenario_attacks), len(scenario_defenses))
+
+    st.sidebar.header("Red / Blue Toggles")
+    st.sidebar.caption("Each row pairs a red-team action with the matching blue-team control.")
+
+    for index in range(max_steps):
+        st.sidebar.markdown(f"**Step {index + 1}**")
+        attack = scenario_attacks[index] if index < len(scenario_attacks) else None
+        defense = scenario_defenses[index] if index < len(scenario_defenses) else None
+
+        if attack:
+            enabled = st.sidebar.checkbox(
+                f"Red: {attack.get('label', attack['type'])}",
+                value=attack.get("enabled", True),
+                key=f"attack-{scenario.get('id', 'scenario')}-{index}",
+            )
+            configured_attack = dict(attack)
+            configured_attack["enabled"] = enabled
+            attacks.append(configured_attack)
+        else:
+            st.sidebar.caption("Red: no paired attack")
+
+        if defense:
+            enabled = st.sidebar.checkbox(
+                f"Blue: {defense.get('label', defense['type'])}",
+                value=defense.get("enabled", True),
+                key=f"defense-{scenario.get('id', 'scenario')}-{index}",
+            )
+            configured_defense = dict(defense)
+            configured_defense["enabled"] = enabled
+            defenses.append(configured_defense)
+        else:
+            st.sidebar.caption("Blue: no paired defense")
+
+    return attacks, defenses
+
+
 def content_preview(content, max_len=72):
     return content if len(content) <= max_len else f"{content[:max_len]}..."
 
@@ -277,6 +319,10 @@ def edge_table(snapshot):
     ]
 
 
+def edge_pairs(snapshot):
+    return {(edge["source"], edge["target"]) for edge in snapshot["edges"]}
+
+
 def context_panel(title, run_result):
     st.subheader(title)
     st.caption(f"Query: {run_result['query']}")
@@ -337,21 +383,7 @@ def main():
     top_k = st.sidebar.slider("Semantic anchors (top_k)", min_value=1, max_value=5, value=scenario.get("top_k", 1))
     hop_depth = st.sidebar.slider("Graph expansion depth", min_value=0, max_value=3, value=scenario.get("hop_depth", 1))
 
-    st.sidebar.header("Attack Toggles")
-    attacks = []
-    for attack in scenario.get("attacks", []):
-        enabled = st.sidebar.checkbox(attack.get("label", attack["type"]), value=attack.get("enabled", True))
-        configured = dict(attack)
-        configured["enabled"] = enabled
-        attacks.append(configured)
-
-    st.sidebar.header("Defense Toggles")
-    defenses = []
-    for defense in scenario.get("defenses", []):
-        enabled = st.sidebar.checkbox(defense.get("label", defense["type"]), value=defense.get("enabled", True))
-        configured = dict(defense)
-        configured["enabled"] = enabled
-        defenses.append(configured)
+    attacks, defenses = paired_controls(scenario)
 
     st.sidebar.header("Graph Controls")
     graph_phase = st.sidebar.radio(
@@ -422,13 +454,45 @@ def main():
     outcome_panel(result)
     expectation_panel(result)
 
+    live_removed_edges = removed_edges - edge_pairs(result["defended_graph"])
+    st.header("Realtime Interaction Graph")
+    st.caption(
+        "This graph always reflects the current sidebar state after enabled red-team actions and enabled blue-team defenses are applied."
+    )
+    live_cols = st.columns([1.2, 1])
+    with live_cols[0]:
+        st.plotly_chart(
+            build_graph_figure(
+                result["defended_graph"],
+                "Current live graph",
+                removed_edges=live_removed_edges,
+                ground_truth_nodes=result["scenario"].get("ground_truth_nodes", []),
+                retrieved_nodes=defended["nodes"],
+                show_edge_labels=show_edge_labels,
+            ),
+            width="stretch",
+        )
+    with live_cols[1]:
+        st.subheader("Current State")
+        active_attack_list = active_labels(attacks)
+        active_defense_list = active_labels(defenses)
+        st.write(f"Active red-team actions: {len(active_attack_list)}")
+        for label in active_attack_list or ["none"]:
+            st.write(f"- {label}")
+        st.write(f"Active blue-team defenses: {len(active_defense_list)}")
+        for label in active_defense_list or ["none"]:
+            st.write(f"- {label}")
+        st.write(f"Current retrieved nodes: {', '.join(defended['nodes']) if defended['nodes'] else 'none'}")
+        if result["defended_poison_exposure"]["matches"]:
+            st.warning("Live graph still exposes forbidden claims.")
+        else:
+            st.success("Live graph has no configured forbidden-claim exposure.")
+
     with st.expander("Demo flow", expanded=False):
         st.write("1. Start on Baseline and explain the trusted evidence path.")
         st.write("2. Switch to Red team attack and toggle attacks one by one.")
         st.write("3. Switch to Blue team defended and toggle defenses one by one.")
         st.write("4. Use the retrieval traces to show why recall and poison exposure changed.")
-        active_attack_list = active_labels(attacks)
-        active_defense_list = active_labels(defenses)
         st.write(f"Active attacks: {', '.join(active_attack_list) if active_attack_list else 'none'}")
         st.write(f"Active defenses: {', '.join(active_defense_list) if active_defense_list else 'none'}")
 

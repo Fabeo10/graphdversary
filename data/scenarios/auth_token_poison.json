@@ -33,11 +33,6 @@
   ],
   "defenses": [
     {
-      "type": "remove_untrusted_nodes",
-      "node_types": ["adversarial"],
-      "label": "Remove nodes without trusted provenance"
-    },
-    {
       "type": "restore_protected_edges",
       "edges": [
         {
@@ -47,6 +42,11 @@
         }
       ],
       "label": "Restore protected Authentication Service -> JWT Validator edge"
+    },
+    {
+      "type": "remove_untrusted_nodes",
+      "node_types": ["adversarial"],
+      "label": "Remove nodes without trusted provenance"
     },
     {
       "type": "sanitize_query",
