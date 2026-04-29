@@ -1,45 +1,110 @@
 {
-    "entities": [
-      {
-        "id": "n1",
-        "content": "Authentication Service: Manages user login requests.",
-        "type": "Service"
-      },
-      {
-        "id": "n2",
-        "content": "User Database: Stores hashed user credentials.",
-        "type": "Database"
-      },
-      {
-        "id": "n3",
-        "content": "JWT Validator: Cryptographically verifies token signatures.",
-        "type": "Component"
-      },
-      {
-        "id": "n4",
-        "content": "Rate Limiter: Prevents brute force login attempts.",
-        "type": "Middleware"
-      }
-    ],
-    "edges": [
-      {
-        "source": "n1",
-        "target": "n3",
-        "relation": "USES"
-      },
-      {
-        "source": "n1",
-        "target": "n2",
-        "relation": "QUERIES"
-      },
-      {
-        "source": "n1",
-        "target": "n4",
-        "relation": "TRIGGERED_BY"
-      }
-    ],
-    "metadata": {
-      "ground_truth_nodes": ["n1", "n3"],
-      "test_query": "How does the Authentication Service verify tokens?"
+  "entities": [
+    {
+      "id": "n1",
+      "content": "Authentication Service: Manages user login requests and coordinates identity checks.",
+      "type": "Service"
+    },
+    {
+      "id": "n2",
+      "content": "User Database: Stores salted password hashes and user credential metadata.",
+      "type": "Database"
+    },
+    {
+      "id": "n3",
+      "content": "JWT Validator: Cryptographically verifies token signatures and issuer claims.",
+      "type": "Component"
+    },
+    {
+      "id": "n4",
+      "content": "Rate Limiter: Prevents brute force login attempts before authentication.",
+      "type": "Middleware"
+    },
+    {
+      "id": "n5",
+      "content": "Audit Logger: Records authentication decisions and token verification failures.",
+      "type": "Service"
+    },
+    {
+      "id": "n6",
+      "content": "Key Management Service: Rotates signing keys and publishes trusted public keys.",
+      "type": "Service"
+    },
+    {
+      "id": "n7",
+      "content": "Session Policy: Requires token expiration, audience validation, and revocation checks.",
+      "type": "Policy"
+    },
+    {
+      "id": "n8",
+      "content": "Admin Console: Allows security operators to revoke compromised user sessions.",
+      "type": "Application"
+    },
+    {
+      "id": "n9",
+      "content": "API Gateway: Routes authenticated requests to downstream services after policy checks.",
+      "type": "Gateway"
+    },
+    {
+      "id": "n10",
+      "content": "Fraud Detection Service: Flags suspicious login velocity and impossible travel patterns.",
+      "type": "Service"
     }
+  ],
+  "edges": [
+    {
+      "source": "n1",
+      "target": "n3",
+      "relation": "USES"
+    },
+    {
+      "source": "n1",
+      "target": "n2",
+      "relation": "QUERIES"
+    },
+    {
+      "source": "n1",
+      "target": "n4",
+      "relation": "TRIGGERED_BY"
+    },
+    {
+      "source": "n1",
+      "target": "n5",
+      "relation": "EMITS_AUDIT_EVENT"
+    },
+    {
+      "source": "n3",
+      "target": "n6",
+      "relation": "FETCHES_KEYS_FROM"
+    },
+    {
+      "source": "n3",
+      "target": "n7",
+      "relation": "ENFORCES"
+    },
+    {
+      "source": "n8",
+      "target": "n7",
+      "relation": "CONFIGURES"
+    },
+    {
+      "source": "n9",
+      "target": "n1",
+      "relation": "DELEGATES_AUTH_TO"
+    },
+    {
+      "source": "n4",
+      "target": "n10",
+      "relation": "SENDS_SIGNAL_TO"
+    },
+    {
+      "source": "n10",
+      "target": "n5",
+      "relation": "WRITES_FINDING_TO"
+    }
+  ],
+  "metadata": {
+    "ground_truth_nodes": ["n1", "n3", "n6", "n7"],
+    "test_query": "How does the Authentication Service verify tokens?"
   }
+}

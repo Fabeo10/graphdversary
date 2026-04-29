@@ -26,9 +26,9 @@ class AdversarialModule:
         return False
 
     @staticmethod
-    def inject_poison_node(kb, target_node, malicious_content):
+    def inject_poison_node(kb, target_node, malicious_content, poison_id=None):
         """Injects a malicious node into the topology and dynamic FAISS index."""
-        poison_id = f"malicious_{random.randint(1000,9999)}"
+        poison_id = poison_id or f"malicious_{random.randint(1000,9999)}"
         
         # 1. Update Topology
         kb.graph.add_node(poison_id, content=malicious_content, type="adversarial")

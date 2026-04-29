@@ -1,6 +1,11 @@
 # graphdversary
 
-A small **adversarial GraphRAG** research demo: a JSON-backed knowledge graph is ingested into **NetworkX** (topology) and **FAISS** (dense retrieval over node text). A **hybrid retriever** picks **semantic anchor** nodes, then **expands along edges** (BFS). An **adversarial module** perturbs the query, removes edges, and injects poison nodes; an **evaluator** scores precision, recall, and a simple faithfulness-style check. The **`pipeline`** script runs a baseline pass, then attacks, and prints a short report.
+A small **adversarial GraphRAG** research demo: a JSON-backed knowledge graph is ingested into **NetworkX** (topology) and **FAISS** (dense retrieval over node text). A **hybrid retriever** picks **semantic anchor** nodes, then **expands along edges** (BFS). An **adversarial module** perturbs the query, removes edges, and injects poison nodes; an **evaluator** scores precision, recall, poison exposure, and a simple faithfulness-style check.
+
+The repo now supports both:
+
+- a scenario-driven terminal pipeline for repeatable runs
+- an interactive **Streamlit** demo for presentation mode with query controls, attack toggles, graph comparison, retrieval traces, and metrics
 
 **Scope:** This is a teaching / baseline implementation, not production RAG or a formal security proof.
 
@@ -36,6 +41,8 @@ A small **adversarial GraphRAG** research demo: a JSON-backed knowledge graph is
    | `faiss-cpu` | L2 vector index over node embeddings |
    | `sentence-transformers` | Encode query and node text into embeddings |
    | `numpy` | Numeric arrays for FAISS |
+   | `streamlit` | Interactive demo app |
+   | `plotly` | Interactive graph rendering |
 
 4. **Optional: Hugging Face token**  
    The first model download may show a warning about unauthenticated Hub requests. For higher rate limits, set a read token and export it (see [Hugging Face: User Access Tokens](https://huggingface.co/docs/hub/en/security-tokens)):
@@ -44,7 +51,7 @@ A small **adversarial GraphRAG** research demo: a JSON-backed knowledge graph is
    export HF_TOKEN=your_token_here
    ```
 
-## Run the pipeline
+## Run the terminal pipeline
 
 From the **repository root** (so `data/` and `src/` resolve correctly), run:
 
@@ -57,10 +64,68 @@ python3 -m src.pipeline
 You should see:
 
 1. Model load / ingestion of `data/mock_corpus.json`  
-2. **Stage 1:** Baseline hybrid retrieval and precision/recall vs. metadata ground-truth nodes  
-3. **Stage 2:** Adversarial steps (edge removal, poison node, query perturbation)  
+2. **Stage 1:** Baseline hybrid retrieval and precision/recall vs. scenario ground-truth nodes  
+3. **Stage 2:** Scenario-defined adversarial steps (edge removal, poison node, query perturbation)  
 4. **Stage 3:** Retrieval under attack  
-5. **Stage 4:** Summary including a mock “LLM” answer and faithfulness-style score  
+5. **Stage 4:** Blue-team defense controls and defended retrieval
+6. **Stage 5:** Summary including attack vs. defended recall and poison exposure
+
+To run a specific scenario:
+
+```bash
+python3 -m src.pipeline --scenario data/scenarios/auth_token_poison.json
+```
+
+To inspect the full structured output:
+
+```bash
+python3 -m src.pipeline --json
+```
+
+## Run scenario preflight checks
+
+Each scenario has `expected_outcomes` that compare ground truth against actual baseline, red-team, and blue-team outcomes. Before a demo, run:
+
+```bash
+python3 -m tests.scenario_tests
+```
+
+The preflight checks validate things like:
+
+- baseline recall meets the scenario threshold
+- red-team attacks expose the expected vulnerable outcome
+- blue-team defenses remove forbidden claims or poisoned nodes
+- attack and defense logs report successful execution
+
+To check one scenario:
+
+```bash
+python3 -m tests.scenario_tests --scenario data/scenarios/auth_token_poison.json
+```
+
+## Run the interactive demo
+
+From the repository root:
+
+```bash
+streamlit run src/demo_app.py
+```
+
+The app opens in your browser. Use the sidebar to:
+
+1. Select a scenario.
+2. Edit the query.
+3. Tune semantic anchors (`top_k`) and graph expansion depth.
+4. Toggle individual attacks.
+5. Toggle blue-team defenses.
+6. Switch between baseline, red-team, and blue-team graph states.
+7. Compare retrieval context, traces, metrics, and poison exposure.
+
+Built-in scenarios cover three red-team test styles:
+
+- **White-box:** `auth_token_poison.json` severs a known internal edge and injects poison near the auth anchor.
+- **Black-box:** `query_ambiguity_drift.json` only changes the user query.
+- **Gray-box:** `gateway_policy_bypass.json` targets a known gateway concept without requiring full graph knowledge.
 
 ## Data format (mock corpus)
 
@@ -70,18 +135,35 @@ You should see:
 - **`edges`:** `{ source, target, relation }` — become directed edges.  
 - **`metadata`:** e.g. `ground_truth_nodes` (list of node ids) and `test_query` (string used as the default question).
 
-To experiment, edit this file and re-run the pipeline.
+Scenario files live in `data/scenarios/`. A scenario points at a corpus and defines:
+
+- **`query`:** the demo question
+- **`ground_truth_nodes`:** relevant node ids for precision/recall
+- **`top_k` / `hop_depth`:** retrieval settings
+- **`attacks`:** edge removals, poison injections, and query perturbations
+- **`defenses`:** query sanitization, protected edge restoration, untrusted node removal, and forbidden-claim blocking
+- **`test_type`:** white-box, black-box, or gray-box classification
+- **`mock_answer`:** answer text used for the faithfulness check
+- **`forbidden_claims`:** claims that should not appear in retrieved context
+- **`expected_outcomes`:** pass/fail thresholds for demo preflight checks
+- **`presenter_notes`:** talking points for the demo
+
+To experiment, edit the corpus or add a new scenario file and re-run the pipeline or Streamlit app.
 
 ## Project layout
 
 | Path | Purpose |
 |------|--------|
 | `data/mock_corpus.json` | Example graph + metadata for evaluation |
+| `data/scenarios/*.json` | Repeatable red-team / blue-team presentation scenarios |
 | `src/build_graph.py` | `KnowledgeBase`: load JSON, build `DiGraph` + FAISS index |
-| `src/hybrid_retriever.py` | FAISS top-k anchor + BFS hop expansion |
+| `src/hybrid_retriever.py` | FAISS top-k anchor + BFS hop expansion with trace output |
 | `src/adversarial_module.py` | Query perturbation, edge cut, poison node + index update |
 | `src/evaluator.py` | Precision, recall, faithfulness heuristic |
-| `src/pipeline.py` | End-to-end script (`python3 -m src.pipeline`) |
+| `src/pipeline.py` | Scenario runner + terminal script (`python3 -m src.pipeline`) |
+| `src/scenario_assertions.py` | Ground truth vs. outcome expectation checks |
+| `src/demo_app.py` | Interactive Streamlit demo |
+| `tests/scenario_tests.py` | Preflight runner for all scenarios |
 | `requirements.txt` | Python dependencies |
 
 ## Troubleshooting
@@ -89,3 +171,4 @@ To experiment, edit this file and re-run the pipeline.
 - **`ModuleNotFoundError: No module named 'src'`** — Run from repo root: `python3 -m src.pipeline`.  
 - **`No module named 'faiss'`** — Activate the same venv where you ran `pip install -r requirements.txt`. On Apple Silicon, `faiss-cpu` from PyPI is usually what you want; for GPU or special builds, see [facebookresearch/faiss](https://github.com/facebookresearch/faiss).  
 - **Slow or blocked first run** — The embedding model is downloaded once; ensure network access or use an offline cache path per Hugging Face / `sentence-transformers` docs.
+- **Streamlit command not found** — Re-run `pip install -r requirements.txt` inside the active virtual environment.
