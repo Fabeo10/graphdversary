@@ -9,6 +9,22 @@ The repo now supports both:
 
 **Scope:** This is a teaching / baseline implementation, not production RAG or a formal security proof.
 
+## Documentation (final project / demo package)
+
+| Document | Purpose |
+|----------|---------|
+| [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) | Objective, threat model, in/out scope, metrics, limitations, how to keep docs in sync when data grows. |
+| [docs/DEMO_CHECKLIST.md](docs/DEMO_CHECKLIST.md) | Reproducible setup, preflight, and a suggested talk track for the Streamlit demo. |
+| [docs/DATASET_AND_SCENARIOS.md](docs/DATASET_AND_SCENARIOS.md) | **Auto-generated** inventory of `data/mock_corpus.json` and every file in `data/scenarios/`. |
+
+After you add scenarios or change the toy corpus, regenerate the inventory:
+
+```bash
+python scripts/generate_project_docs.py
+```
+
+Commit the updated `docs/DATASET_AND_SCENARIOS.md` with your data changes.
+
 ## Requirements
 
 - **Python 3.10+** (3.11 recommended; tested with 3.11 in development)
@@ -155,11 +171,7 @@ Use **Duel scope -> All scenarios** to run a full gauntlet across every built-in
 
 If Ollama is not running, the duel still works and falls back to rule-based rationales.
 
-Built-in scenarios cover three red-team test styles:
-
-- **White-box:** `auth_token_poison.json` severs a known internal edge and injects poison near the auth anchor.
-- **Black-box:** `query_ambiguity_drift.json` only changes the user query.
-- **Gray-box:** `gateway_policy_bypass.json` targets a known gateway concept without requiring full graph knowledge.
+Built-in scenarios are summarized by **test type** in each JSON file; see the auto-generated table in [docs/DATASET_AND_SCENARIOS.md](docs/DATASET_AND_SCENARIOS.md) for titles, attack/defense counts, and corpus links (refresh with `python scripts/generate_project_docs.py` after you extend the toy dataset).
 
 ## Data format (mock corpus)
 
@@ -182,12 +194,14 @@ Scenario files live in `data/scenarios/`. A scenario points at a corpus and defi
 - **`expected_outcomes`:** pass/fail thresholds for demo preflight checks
 - **`presenter_notes`:** talking points for the demo
 
-To experiment, edit the corpus or add a new scenario file and re-run the pipeline or Streamlit app.
+To experiment, edit the corpus or add a new scenario file and re-run the pipeline or Streamlit app. Then run `python scripts/generate_project_docs.py` so [docs/DATASET_AND_SCENARIOS.md](docs/DATASET_AND_SCENARIOS.md) stays current.
 
 ## Project layout
 
 | Path | Purpose |
 |------|--------|
+| `docs/` | Project brief, demo checklist, auto-generated [DATASET_AND_SCENARIOS.md](docs/DATASET_AND_SCENARIOS.md) |
+| `scripts/generate_project_docs.py` | Regenerates dataset/scenario inventory from `data/` |
 | `data/mock_corpus.json` | Example graph + metadata for evaluation |
 | `data/scenarios/*.json` | Repeatable red-team / blue-team presentation scenarios |
 | `src/build_graph.py` | `KnowledgeBase`: load JSON, build `DiGraph` + FAISS index |
