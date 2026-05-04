@@ -1,5 +1,9 @@
 """
 Rule-based and optional local-LLM agent duel helpers.
+
+Hybrid Ollama uses separate HTTP POST /api/generate calls per turn—no shared chat
+session, context window, or coordinator passing one model the other's hidden chain-of-thought.
+Each side only sees its role, allowed options, and published retrieval metrics (environment).
 """
 
 import json
@@ -9,6 +13,15 @@ import urllib.error
 import urllib.request
 
 from src.pipeline import run_scenario
+
+# Default family split for adversarial realism: attacker vs defender use different weights.
+DEFAULT_OLLAMA_RED = "llama3.2:3b"
+DEFAULT_OLLAMA_BLUE = "qwen2.5:3b"
+
+_ISOLATION_NOTE = (
+    "Stateless single-turn: there is no shared chat history with the opposing agent's model; "
+    "do not assume access to the other side's private rationale."
+)
 
 
 def _enabled_prefix(items, count):
@@ -30,6 +43,7 @@ def _fallback_rationale(role, action):
 def _ollama_rationale(role, action, result, model, timeout=8):
     prompt = {
         "role": role,
+        "simulation_policy": _ISOLATION_NOTE,
         "action": action,
         "metrics": {
             "attack_recall": result["adversarial"]["metrics"]["recall"],
@@ -80,6 +94,7 @@ def _extract_json(text):
 def _ollama_choice(role, options, result, model, timeout=10):
     prompt = {
         "role": role,
+        "simulation_policy": _ISOLATION_NOTE,
         "allowed_options": [
             {
                 "option": index + 1,
@@ -133,12 +148,26 @@ def _ollama_choice(role, options, result, model, timeout=10):
     return None
 
 
-def choose_action(role, options, result, mode="Agent-selected", ollama_model="qwen2.5:3b", seed="default", step=0):
+def _model_for_role(role, ollama_model_red, ollama_model_blue):
+    return ollama_model_red if role == "red" else ollama_model_blue
+
+
+def choose_action(
+    role,
+    options,
+    result,
+    mode="Agent-selected",
+    ollama_model_red=DEFAULT_OLLAMA_RED,
+    ollama_model_blue=DEFAULT_OLLAMA_BLUE,
+    seed="default",
+    step=0,
+):
     if not options:
         return None, None
 
     if mode == "Hybrid Ollama":
-        llm_choice = _ollama_choice(role, options, result, ollama_model)
+        model = _model_for_role(role, ollama_model_red, ollama_model_blue)
+        llm_choice = _ollama_choice(role, options, result, model)
         if llm_choice:
             selected_index, rationale = llm_choice
             action = options[selected_index]
@@ -150,9 +179,17 @@ def choose_action(role, options, result, mode="Agent-selected", ollama_model="qw
     return selected_index, _fallback_rationale(role, action)
 
 
-def explain_action(role, action, result, mode="Agent-selected", ollama_model="qwen2.5:3b"):
+def explain_action(
+    role,
+    action,
+    result,
+    mode="Agent-selected",
+    ollama_model_red=DEFAULT_OLLAMA_RED,
+    ollama_model_blue=DEFAULT_OLLAMA_BLUE,
+):
     if mode == "Hybrid Ollama":
-        rationale = _ollama_rationale(role, action, result, ollama_model)
+        model = _model_for_role(role, ollama_model_red, ollama_model_blue)
+        rationale = _ollama_rationale(role, action, result, model)
         if rationale:
             return rationale
     return _fallback_rationale(role, action)
@@ -190,7 +227,8 @@ def run_agent_duel_steps(
     mock_answer,
     steps,
     mode="Agent-selected",
-    ollama_model="qwen2.5:3b",
+    ollama_model_red=DEFAULT_OLLAMA_RED,
+    ollama_model_blue=DEFAULT_OLLAMA_BLUE,
     seed="default",
 ):
     """Run cumulative one-agent-at-a-time duel steps with agent-selected actions."""
@@ -238,7 +276,8 @@ def run_agent_duel_steps(
                 options,
                 final_result,
                 mode,
-                ollama_model,
+                ollama_model_red,
+                ollama_model_blue,
                 seed,
                 step,
             )
@@ -274,7 +313,8 @@ def run_agent_duel_steps(
                 options,
                 final_result,
                 mode,
-                ollama_model,
+                ollama_model_red,
+                ollama_model_blue,
                 seed,
                 step,
             )
@@ -329,7 +369,8 @@ def run_agent_duel(
     mock_answer,
     turns,
     mode="Agent-selected",
-    ollama_model="qwen2.5:3b",
+    ollama_model_red=DEFAULT_OLLAMA_RED,
+    ollama_model_blue=DEFAULT_OLLAMA_BLUE,
 ):
     """Run cumulative red/blue turns and return the final result plus a log."""
     return run_agent_duel_steps(
@@ -342,5 +383,6 @@ def run_agent_duel(
         mock_answer=mock_answer,
         steps=turns * 2,
         mode=mode,
-        ollama_model=ollama_model,
+        ollama_model_red=ollama_model_red,
+        ollama_model_blue=ollama_model_blue,
     )

@@ -124,11 +124,19 @@ The app opens in your browser. Use the sidebar to:
 
 ## Optional local LLM duel setup
 
-The Agent Duel works without an LLM in **Agent-selected** mode. In that mode, local agent logic chooses from the remaining scenario-approved red/blue options. For free local LLM action selection and rationales, install [Ollama](https://ollama.com/) and pull one small model:
+The Agent Duel works without an LLM in **Agent-selected** mode. In that mode, local agent logic chooses from the remaining scenario-approved red/blue options.
+
+For **Hybrid Ollama**, install [Ollama](https://ollama.com/) and pull **both** small models so red (attacker) and blue (defender) can run as separate weights with no shared chat session—each agent turn is a single stateless `/api/generate` request:
 
 ```bash
+ollama pull llama3.2:3b
 ollama pull qwen2.5:3b
 ```
+
+- **Red team (attacker)** defaults to **Llama**: `llama3.2:3b`
+- **Blue team (defender)** defaults to **Qwen**: `qwen2.5:3b`
+
+The models do not share a conversation: the red model never sees the blue model’s prior hidden chain-of-thought, and vice versa. They only see the same published retrieval metrics and their own role’s allowed actions (the environment), matching a simple “two independent agents” simulation.
 
 Then start or verify the Ollama service:
 
@@ -140,7 +148,7 @@ In the Streamlit app:
 
 1. Open **Agent Duel**.
 2. Choose **Hybrid Ollama**.
-3. Keep the model as `qwen2.5:3b` or enter another local model.
+3. Adjust **Red team** and **Blue team** model names if you use different Ollama tags.
 4. Click **Run next agent**, **Run next full turn**, or **Auto-play duel**.
 
 Use **Duel scope -> All scenarios** to run a full gauntlet across every built-in scenario in one pass.

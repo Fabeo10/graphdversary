@@ -15,7 +15,11 @@ if str(PROJECT_ROOT_FOR_IMPORTS) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT_FOR_IMPORTS))
 
 from src.pipeline import DEFAULT_SCENARIO_PATH, PROJECT_ROOT, load_scenario, run_scenario
-from src.agent_duel import run_agent_duel_steps
+from src.agent_duel import (
+    DEFAULT_OLLAMA_BLUE,
+    DEFAULT_OLLAMA_RED,
+    run_agent_duel_steps,
+)
 from src.scenario_assertions import evaluate_expectations
 
 
@@ -370,7 +374,7 @@ def expectation_panel(result):
         st.dataframe(expectation_result["checks"], width="stretch", hide_index=True)
 
 
-def run_all_scenario_duels(scenarios, mode, ollama_model, seed):
+def run_all_scenario_duels(scenarios, mode, ollama_model_red, ollama_model_blue, seed):
     rows = []
     logs = []
     for index, path in enumerate(scenarios):
@@ -386,7 +390,8 @@ def run_all_scenario_duels(scenarios, mode, ollama_model, seed):
             mock_answer=scenario.get("mock_answer", ""),
             steps=max_steps,
             mode=mode,
-            ollama_model=ollama_model,
+            ollama_model_red=ollama_model_red,
+            ollama_model_blue=ollama_model_blue,
             seed=f"{seed}:scenario:{index}",
         )
         result = duel["result"]
@@ -432,10 +437,27 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     mode = st.radio("Agent mode", ["Agent-selected", "Hybrid Ollama"], horizontal=True)
     duel_scope = st.radio("Duel scope", ["Current scenario", "All scenarios"], horizontal=True)
     action_pool = st.radio("Action pool", ["Current scenario options", "All scenario options"], horizontal=True)
-    ollama_model = "qwen2.5:3b"
+    ollama_model_red = DEFAULT_OLLAMA_RED
+    ollama_model_blue = DEFAULT_OLLAMA_BLUE
     if mode == "Hybrid Ollama":
-        ollama_model = st.text_input("Ollama model", value=ollama_model)
-        st.caption("If Ollama is not running, the duel automatically falls back to local agent selection.")
+        model_cols = st.columns(2)
+        with model_cols[0]:
+            ollama_model_red = st.text_input(
+                "Red team Ollama model (attacker)",
+                value=DEFAULT_OLLAMA_RED,
+                help="Llama family default: separate weights from blue; no shared chat with blue.",
+            )
+        with model_cols[1]:
+            ollama_model_blue = st.text_input(
+                "Blue team Ollama model (defender)",
+                value=DEFAULT_OLLAMA_BLUE,
+                help="Qwen default: separate weights from red; each turn is a stateless API call.",
+            )
+        st.caption(
+            "Red and blue use different model names and independent /api/generate requests—no shared "
+            "conversation state. If Ollama is down or a model is missing, the duel falls back to "
+            "deterministic local selection."
+        )
 
     if action_pool == "All scenario options":
         duel_attacks, duel_defenses = global_action_pool(scenario_options())
@@ -485,7 +507,8 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
                     st.session_state[gauntlet_key] = run_all_scenario_duels(
                         scenario_options(),
                         mode,
-                        ollama_model,
+                        ollama_model_red,
+                        ollama_model_blue,
                         st.session_state[seed_key],
                     )
         with gauntlet_cols[1]:
@@ -512,7 +535,8 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         mock_answer=mock_answer,
         steps=st.session_state[step_key],
         mode=mode,
-        ollama_model=ollama_model,
+        ollama_model_red=ollama_model_red,
+        ollama_model_blue=ollama_model_blue,
         seed=st.session_state[seed_key],
     )
     duel_result = duel["result"]
