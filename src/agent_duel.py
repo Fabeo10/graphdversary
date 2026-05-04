@@ -3,6 +3,8 @@ Rule-based and optional local-LLM agent duel helpers.
 """
 
 import json
+import random
+import re
 import urllib.error
 import urllib.request
 
@@ -21,8 +23,8 @@ def _enabled_prefix(items, count):
 def _fallback_rationale(role, action):
     label = action.get("label", action.get("type", "action"))
     if role == "red":
-        return f"Selected '{label}' because it is the next available pressure point in the scenario."
-    return f"Selected '{label}' because it is the paired control for the latest red-team action."
+        return f"Selected '{label}' from the allowed red-team options to vary the attack path."
+    return f"Selected '{label}' from the allowed blue-team controls to respond to the current state."
 
 
 def _ollama_rationale(role, action, result, model, timeout=8):
@@ -60,7 +62,95 @@ def _ollama_rationale(role, action, result, model, timeout=8):
     return rationale or None
 
 
-def explain_action(role, action, result, mode="Rule-based", ollama_model="qwen2.5:3b"):
+def _extract_json(text):
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+def _ollama_choice(role, options, result, model, timeout=10):
+    prompt = {
+        "role": role,
+        "allowed_options": [
+            {
+                "option": index + 1,
+                "type": option.get("type"),
+                "label": option.get("label", option.get("type", "action")),
+            }
+            for index, option in enumerate(options)
+        ],
+        "metrics": {
+            "baseline_recall": result["baseline"]["metrics"]["recall"],
+            "attack_recall": result["adversarial"]["metrics"]["recall"],
+            "defended_recall": result["defended"]["metrics"]["recall"],
+            "attack_poison_exposure": result["poison_exposure"]["score"],
+            "defended_poison_exposure": result["defended_poison_exposure"]["score"],
+        },
+        "instruction": (
+            "Choose exactly one allowed option. Return only JSON with keys "
+            "'option' and 'rationale'. The option value must be the option number."
+        ),
+    }
+    payload = json.dumps({
+        "model": model,
+        "prompt": json.dumps(prompt),
+        "stream": False,
+        "options": {"temperature": 0.7},
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+    parsed = _extract_json(data.get("response", ""))
+    if not parsed:
+        return None
+
+    try:
+        choice = int(parsed.get("option")) - 1
+    except (TypeError, ValueError):
+        return None
+
+    if 0 <= choice < len(options):
+        return choice, parsed.get("rationale", "").strip()
+    return None
+
+
+def choose_action(role, options, result, mode="Agent-selected", ollama_model="qwen2.5:3b", seed="default", step=0):
+    if not options:
+        return None, None
+
+    if mode == "Hybrid Ollama":
+        llm_choice = _ollama_choice(role, options, result, ollama_model)
+        if llm_choice:
+            selected_index, rationale = llm_choice
+            action = options[selected_index]
+            return selected_index, rationale or _fallback_rationale(role, action)
+
+    rng = random.Random(f"{seed}:{role}:{step}:{len(options)}")
+    selected_index = rng.randrange(len(options))
+    action = options[selected_index]
+    return selected_index, _fallback_rationale(role, action)
+
+
+def explain_action(role, action, result, mode="Agent-selected", ollama_model="qwen2.5:3b"):
     if mode == "Hybrid Ollama":
         rationale = _ollama_rationale(role, action, result, ollama_model)
         if rationale:
@@ -68,32 +158,23 @@ def explain_action(role, action, result, mode="Rule-based", ollama_model="qwen2.
     return _fallback_rationale(role, action)
 
 
-def duel_events(attacks, defenses):
-    events = []
-    max_turns = max(len(attacks), len(defenses))
-    for index in range(max_turns):
-        if index < len(attacks):
-            events.append({"turn": index + 1, "agent": "red", "index": index})
-        if index < len(defenses):
-            events.append({"turn": index + 1, "agent": "blue", "index": index})
-    return events
+def _enabled_indices(items, indices):
+    configured = []
+    for index in indices:
+        copy = dict(items[index])
+        copy["enabled"] = True
+        configured.append(copy)
+    return configured
 
 
-def _counts_for_events(events):
-    red_count = sum(1 for event in events if event["agent"] == "red")
-    blue_count = sum(1 for event in events if event["agent"] == "blue")
-    return red_count, blue_count
-
-
-def _run_duel_state(scenario_path, query, top_k, hop_depth, attacks, defenses, mock_answer, events):
-    red_count, blue_count = _counts_for_events(events)
+def _run_duel_state(scenario_path, query, top_k, hop_depth, attacks, defenses, mock_answer, attack_indices, defense_indices):
     return run_scenario(
         scenario_path=scenario_path,
         query=query,
         top_k=top_k,
         hop_depth=hop_depth,
-        attacks=_enabled_prefix(attacks, red_count),
-        defenses=_enabled_prefix(defenses, blue_count),
+        attacks=_enabled_indices(attacks, attack_indices),
+        defenses=_enabled_indices(defenses, defense_indices),
         mock_answer=mock_answer,
         verbose=False,
     )
@@ -108,13 +189,16 @@ def run_agent_duel_steps(
     defenses,
     mock_answer,
     steps,
-    mode="Rule-based",
+    mode="Agent-selected",
     ollama_model="qwen2.5:3b",
+    seed="default",
 ):
-    """Run cumulative one-agent-at-a-time duel steps and return current state."""
-    events = duel_events(attacks, defenses)
-    steps = max(0, min(steps, len(events)))
-    active_events = events[:steps]
+    """Run cumulative one-agent-at-a-time duel steps with agent-selected actions."""
+    max_steps = len(attacks) + len(defenses)
+    steps = max(0, min(steps, max_steps))
+    selected_attack_indices = []
+    selected_defense_indices = []
+    log = []
     final_result = _run_duel_state(
         scenario_path,
         query,
@@ -123,52 +207,113 @@ def run_agent_duel_steps(
         attacks,
         defenses,
         mock_answer,
-        active_events,
+        selected_attack_indices,
+        selected_defense_indices,
     )
+    log.append({
+        "step": 0,
+        "turn": 0,
+        "agent": "system",
+        "action": "Capture baseline state",
+        "rationale": "Both agents observe the baseline graph, query, retrieval metrics, and available action options before acting.",
+        "recall": final_result["baseline"]["metrics"]["recall"],
+        "poison_exposure": 0.0,
+        "available_options": f"{len(attacks)} attacks / {len(defenses)} defenses",
+    })
 
-    log = []
-    for index, event in enumerate(active_events):
-        step_events = active_events[:index + 1]
-        step_result = _run_duel_state(
-            scenario_path,
-            query,
-            top_k,
-            hop_depth,
-            attacks,
-            defenses,
-            mock_answer,
-            step_events,
-        )
-        if event["agent"] == "red":
-            action = attacks[event["index"]]
+    current_agent = "baseline"
+    for step in range(1, steps + 1):
+        red_remaining = [index for index in range(len(attacks)) if index not in selected_attack_indices]
+        blue_remaining = [index for index in range(len(defenses)) if index not in selected_defense_indices]
+        preferred_agent = "red" if step % 2 == 1 else "blue"
+        if preferred_agent == "red" and not red_remaining:
+            preferred_agent = "blue"
+        elif preferred_agent == "blue" and not blue_remaining:
+            preferred_agent = "red"
+
+        if preferred_agent == "red" and red_remaining:
+            options = [attacks[index] for index in red_remaining]
+            selected_offset, rationale = choose_action(
+                "red",
+                options,
+                final_result,
+                mode,
+                ollama_model,
+                seed,
+                step,
+            )
+            selected_index = red_remaining[selected_offset]
+            selected_attack_indices.append(selected_index)
+            final_result = _run_duel_state(
+                scenario_path,
+                query,
+                top_k,
+                hop_depth,
+                attacks,
+                defenses,
+                mock_answer,
+                selected_attack_indices,
+                selected_defense_indices,
+            )
+            action = attacks[selected_index]
             log.append({
-                "step": index + 1,
-                "turn": event["turn"],
+                "step": step,
+                "turn": (step + 1) // 2,
                 "agent": "red",
                 "action": action.get("label", action.get("type", "attack")),
-                "rationale": explain_action("red", action, step_result, mode, ollama_model),
-                "recall": step_result["adversarial"]["metrics"]["recall"],
-                "poison_exposure": step_result["poison_exposure"]["score"],
+                "rationale": rationale,
+                "recall": final_result["adversarial"]["metrics"]["recall"],
+                "poison_exposure": final_result["poison_exposure"]["score"],
+                "available_options": ", ".join(option.get("label", option.get("type", "attack")) for option in options),
             })
-        else:
-            action = defenses[event["index"]]
+            current_agent = "red"
+        elif blue_remaining:
+            options = [defenses[index] for index in blue_remaining]
+            selected_offset, rationale = choose_action(
+                "blue",
+                options,
+                final_result,
+                mode,
+                ollama_model,
+                seed,
+                step,
+            )
+            selected_index = blue_remaining[selected_offset]
+            selected_defense_indices.append(selected_index)
+            final_result = _run_duel_state(
+                scenario_path,
+                query,
+                top_k,
+                hop_depth,
+                attacks,
+                defenses,
+                mock_answer,
+                selected_attack_indices,
+                selected_defense_indices,
+            )
+            action = defenses[selected_index]
             log.append({
-                "step": index + 1,
-                "turn": event["turn"],
+                "step": step,
+                "turn": step // 2,
                 "agent": "blue",
                 "action": action.get("label", action.get("type", "defense")),
-                "rationale": explain_action("blue", action, step_result, mode, ollama_model),
-                "recall": step_result["defended"]["metrics"]["recall"],
-                "poison_exposure": step_result["defended_poison_exposure"]["score"],
+                "rationale": rationale,
+                "recall": final_result["defended"]["metrics"]["recall"],
+                "poison_exposure": final_result["defended_poison_exposure"]["score"],
+                "available_options": ", ".join(option.get("label", option.get("type", "defense")) for option in options),
             })
+            current_agent = "blue"
+        else:
+            break
 
-    current_event = active_events[-1] if active_events else None
     return {
         "steps": steps,
-        "max_steps": len(events),
+        "max_steps": max_steps,
         "turns": (steps + 1) // 2,
         "max_turns": max(len(attacks), len(defenses)),
-        "current_agent": current_event["agent"] if current_event else "baseline",
+        "current_agent": current_agent,
+        "selected_attack_indices": selected_attack_indices,
+        "selected_defense_indices": selected_defense_indices,
         "log": log,
         "result": final_result,
     }
@@ -183,7 +328,7 @@ def run_agent_duel(
     defenses,
     mock_answer,
     turns,
-    mode="Rule-based",
+    mode="Agent-selected",
     ollama_model="qwen2.5:3b",
 ):
     """Run cumulative red/blue turns and return the final result plus a log."""

@@ -3,6 +3,7 @@ Interactive Streamlit demo for graphdversary.
 """
 
 from pathlib import Path
+import random
 import sys
 import time
 
@@ -369,25 +370,89 @@ def expectation_panel(result):
         st.dataframe(expectation_result["checks"], width="stretch", hide_index=True)
 
 
+def run_all_scenario_duels(scenarios, mode, ollama_model, seed):
+    rows = []
+    logs = []
+    for index, path in enumerate(scenarios):
+        scenario = load_scenario(path)
+        max_steps = len(scenario.get("attacks", [])) + len(scenario.get("defenses", []))
+        duel = run_agent_duel_steps(
+            scenario_path=str(path),
+            query=scenario.get("query", ""),
+            top_k=scenario.get("top_k", 1),
+            hop_depth=scenario.get("hop_depth", 1),
+            attacks=scenario.get("attacks", []),
+            defenses=scenario.get("defenses", []),
+            mock_answer=scenario.get("mock_answer", ""),
+            steps=max_steps,
+            mode=mode,
+            ollama_model=ollama_model,
+            seed=f"{seed}:scenario:{index}",
+        )
+        result = duel["result"]
+        rows.append({
+            "Scenario": scenario.get("title", path.stem),
+            "Type": scenario.get("test_type", "unspecified"),
+            "Steps": duel["steps"],
+            "Attack recall": f"{result['adversarial']['metrics']['recall']:.2f}",
+            "Defended recall": f"{result['defended']['metrics']['recall']:.2f}",
+            "Attack poison": f"{result['poison_exposure']['score']:.2f}",
+            "Defended poison": f"{result['defended_poison_exposure']['score']:.2f}",
+        })
+        for log_row in duel["log"]:
+            logs.append({"scenario": scenario.get("title", path.stem), **log_row})
+    return rows, logs
+
+
+def global_action_pool(paths):
+    attacks = []
+    defenses = []
+    for path in paths:
+        scenario = load_scenario(path)
+        scenario_title = scenario.get("title", Path(path).stem)
+        for attack in scenario.get("attacks", []):
+            action = dict(attack)
+            action["label"] = f"{scenario_title}: {attack.get('label', attack.get('type', 'attack'))}"
+            action["source_scenario"] = scenario.get("id", Path(path).stem)
+            attacks.append(action)
+        for defense in scenario.get("defenses", []):
+            action = dict(defense)
+            action["label"] = f"{scenario_title}: {defense.get('label', defense.get('type', 'defense'))}"
+            action["source_scenario"] = scenario.get("id", Path(path).stem)
+            defenses.append(action)
+    return attacks, defenses
+
+
 def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defenses, mock_answer, show_edge_labels):
     st.header("Agent Duel")
     st.caption(
-        "Run a constrained red-team / blue-team duel. Agents can only select scenario-approved actions; they never execute code or mutate the graph directly."
+        "Run a constrained red-team / blue-team duel. Agents choose from scenario-approved options; they never execute code or mutate the graph directly."
     )
 
-    mode = st.radio("Agent mode", ["Rule-based", "Hybrid Ollama"], horizontal=True)
+    mode = st.radio("Agent mode", ["Agent-selected", "Hybrid Ollama"], horizontal=True)
+    duel_scope = st.radio("Duel scope", ["Current scenario", "All scenarios"], horizontal=True)
+    action_pool = st.radio("Action pool", ["Current scenario options", "All scenario options"], horizontal=True)
     ollama_model = "qwen2.5:3b"
     if mode == "Hybrid Ollama":
         ollama_model = st.text_input("Ollama model", value=ollama_model)
-        st.caption("If Ollama is not running, the duel automatically falls back to rule-based rationales.")
+        st.caption("If Ollama is not running, the duel automatically falls back to local agent selection.")
 
-    max_steps = len(attacks) + len(defenses)
+    if action_pool == "All scenario options":
+        duel_attacks, duel_defenses = global_action_pool(scenario_options())
+    else:
+        duel_attacks, duel_defenses = scenario.get("attacks", []), scenario.get("defenses", [])
+
+    max_steps = len(duel_attacks) + len(duel_defenses)
     step_key = session_key(scenario, "duel-steps")
     autoplay_key = session_key(scenario, "duel-autoplay")
+    seed_key = session_key(scenario, "duel-seed")
+    gauntlet_key = session_key(scenario, "duel-gauntlet")
     if step_key not in st.session_state:
         st.session_state[step_key] = 0
     if autoplay_key not in st.session_state:
         st.session_state[autoplay_key] = False
+    if seed_key not in st.session_state:
+        st.session_state[seed_key] = random.randint(1, 1_000_000)
 
     delay_seconds = st.slider("Autoplay delay between agents", min_value=1, max_value=5, value=2)
     controls = st.columns(4)
@@ -404,18 +469,51 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         if st.button("Reset duel"):
             st.session_state[step_key] = 0
             st.session_state[autoplay_key] = False
+            st.session_state[seed_key] = random.randint(1, 1_000_000)
+            st.session_state.pop(gauntlet_key, None)
+
+    if duel_scope == "All scenarios":
+        st.subheader("All-Scenario Duel Gauntlet")
+        st.caption("Click once to run every built-in scenario. Results are stored until you reset or rerun the gauntlet.")
+        if mode == "Hybrid Ollama":
+            st.warning("Hybrid Ollama can take longer because every agent action asks the local model to choose from options.")
+
+        gauntlet_cols = st.columns(2)
+        with gauntlet_cols[0]:
+            if st.button("Run all-scenario gauntlet"):
+                with st.spinner("Running all scenarios..."):
+                    st.session_state[gauntlet_key] = run_all_scenario_duels(
+                        scenario_options(),
+                        mode,
+                        ollama_model,
+                        st.session_state[seed_key],
+                    )
+        with gauntlet_cols[1]:
+            if st.button("Clear gauntlet results"):
+                st.session_state.pop(gauntlet_key, None)
+
+        if gauntlet_key in st.session_state:
+            all_rows, all_logs = st.session_state[gauntlet_key]
+            st.dataframe(all_rows, width="stretch", hide_index=True)
+            with st.expander("All-scenario interaction log", expanded=False):
+                st.dataframe(all_logs, width="stretch", hide_index=True)
+        else:
+            st.info("Gauntlet has not run yet. Click 'Run all-scenario gauntlet' to start.")
+        st.info("Switch Duel scope back to Current scenario to step through one live battle graph at a time.")
+        return
 
     duel = run_agent_duel_steps(
         scenario_path=str(selected),
         query=query,
         top_k=top_k,
         hop_depth=hop_depth,
-        attacks=scenario.get("attacks", []),
-        defenses=scenario.get("defenses", []),
+        attacks=duel_attacks,
+        defenses=duel_defenses,
         mock_answer=mock_answer,
         steps=st.session_state[step_key],
         mode=mode,
         ollama_model=ollama_model,
+        seed=st.session_state[seed_key],
     )
     duel_result = duel["result"]
     st.progress(duel["steps"] / duel["max_steps"] if duel["max_steps"] else 0.0)
@@ -423,6 +521,8 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         f"Duel progress: {duel['steps']} / {duel['max_steps']} agent actions. "
         f"Current actor: {duel['current_agent']}."
     )
+    st.caption(f"Duel seed: {st.session_state[seed_key]} (reset to generate a different path).")
+    st.caption(f"Action pool: {len(duel_attacks)} attack options / {len(duel_defenses)} defense options.")
 
     duel_cols = st.columns([1.2, 1])
     with duel_cols[0]:
@@ -563,119 +663,137 @@ def main():
     with metric_cols[5]:
         metric_card("Defended precision", defended["metrics"]["precision"])
 
-    outcome_panel(result)
-    expectation_panel(result)
-    agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defenses, mock_answer, show_edge_labels)
-
-    live_removed_edges = removed_edges - edge_pairs(result["defended_graph"])
-    st.header("Realtime Interaction Graph")
-    st.caption(
-        "This graph always reflects the current sidebar state after enabled red-team actions and enabled blue-team defenses are applied."
-    )
-    live_cols = st.columns([1.2, 1])
-    with live_cols[0]:
-        st.plotly_chart(
-            build_graph_figure(
-                result["defended_graph"],
-                "Current live graph",
-                removed_edges=live_removed_edges,
-                ground_truth_nodes=result["scenario"].get("ground_truth_nodes", []),
-                retrieved_nodes=defended["nodes"],
-                show_edge_labels=show_edge_labels,
-            ),
-            width="stretch",
-        )
-    with live_cols[1]:
-        st.subheader("Current State")
-        active_attack_list = active_labels(attacks)
-        active_defense_list = active_labels(defenses)
-        st.write(f"Active red-team actions: {len(active_attack_list)}")
-        for label in active_attack_list or ["none"]:
-            st.write(f"- {label}")
-        st.write(f"Active blue-team defenses: {len(active_defense_list)}")
-        for label in active_defense_list or ["none"]:
-            st.write(f"- {label}")
-        st.write(f"Current retrieved nodes: {', '.join(defended['nodes']) if defended['nodes'] else 'none'}")
-        if result["defended_poison_exposure"]["matches"]:
-            st.warning("Live graph still exposes forbidden claims.")
-        else:
-            st.success("Live graph has no configured forbidden-claim exposure.")
-
-    with st.expander("Demo flow", expanded=False):
-        st.write("1. Start on Baseline and explain the trusted evidence path.")
-        st.write("2. Switch to Red team attack and toggle attacks one by one.")
-        st.write("3. Switch to Blue team defended and toggle defenses one by one.")
-        st.write("4. Use the retrieval traces to show why recall and poison exposure changed.")
-        st.write(f"Active attacks: {', '.join(active_attack_list) if active_attack_list else 'none'}")
-        st.write(f"Active defenses: {', '.join(active_defense_list) if active_defense_list else 'none'}")
-
     graph_config = {
         "Baseline": (result["baseline_graph"], baseline, set(), "Baseline evidence graph"),
         "Red team attack": (result["attacked_graph"], adversarial, removed_edges, "Red-team attacked graph"),
         "Blue team defended": (result["defended_graph"], defended, set(), "Blue-team defended graph"),
     }
     graph_snapshot, graph_result, graph_removed_edges, graph_title = graph_config[graph_phase]
+    active_attack_list = active_labels(attacks)
+    active_defense_list = active_labels(defenses)
 
-    st.plotly_chart(
-        build_graph_figure(
-            graph_snapshot,
-            graph_title,
-            removed_edges=graph_removed_edges,
-            ground_truth_nodes=result["scenario"].get("ground_truth_nodes", []),
-            retrieved_nodes=graph_result["nodes"],
-            show_edge_labels=show_edge_labels,
-        ),
-        width="stretch",
-    )
+    overview_tab, live_tab, duel_tab, graphs_tab, traces_tab, tests_tab = st.tabs([
+        "Overview",
+        "Realtime Graph",
+        "Agent Duel",
+        "Scenario Graphs",
+        "Traces & Logs",
+        "Tests",
+    ])
 
-    table_cols = st.columns([1.4, 1])
-    with table_cols[0]:
-        st.subheader("Node map")
-        st.dataframe(
-            node_table(graph_snapshot, result["scenario"].get("ground_truth_nodes", []), graph_result["nodes"]),
-            width="stretch",
-            hide_index=True,
+    with overview_tab:
+        outcome_panel(result)
+        with st.expander("Demo flow", expanded=True):
+            st.write("1. Start on Baseline and explain the trusted evidence path.")
+            st.write("2. Switch to Red team attack and toggle attacks one by one.")
+            st.write("3. Switch to Blue team defended and toggle defenses one by one.")
+            st.write("4. Use the retrieval traces to show why recall and poison exposure changed.")
+            st.write(f"Active attacks: {', '.join(active_attack_list) if active_attack_list else 'none'}")
+            st.write(f"Active defenses: {', '.join(active_defense_list) if active_defense_list else 'none'}")
+
+        st.header("Generated Answer Check")
+        st.write(result["answer"])
+        if result["poison_exposure"]["matches"]:
+            st.warning("Forbidden claims exposed: " + ", ".join(result["poison_exposure"]["matches"]))
+        else:
+            st.success("No configured forbidden claims appeared in the retrieved context.")
+        if result["defended_poison_exposure"]["matches"]:
+            st.warning("Defended context still exposes: " + ", ".join(result["defended_poison_exposure"]["matches"]))
+        else:
+            st.success("Blue-team defended context does not expose configured forbidden claims.")
+
+        with st.expander("Presenter notes"):
+            for note in scenario.get("presenter_notes", []):
+                st.write(f"- {note}")
+
+    with live_tab:
+        live_removed_edges = removed_edges - edge_pairs(result["defended_graph"])
+        st.header("Realtime Interaction Graph")
+        st.caption(
+            "This graph always reflects the current sidebar state after enabled red-team actions and enabled blue-team defenses are applied."
         )
-    with table_cols[1]:
-        st.subheader("Edges")
-        st.dataframe(edge_table(graph_snapshot), width="stretch", hide_index=True)
+        live_cols = st.columns([1.2, 1])
+        with live_cols[0]:
+            st.plotly_chart(
+                build_graph_figure(
+                    result["defended_graph"],
+                    "Current live graph",
+                    removed_edges=live_removed_edges,
+                    ground_truth_nodes=result["scenario"].get("ground_truth_nodes", []),
+                    retrieved_nodes=defended["nodes"],
+                    show_edge_labels=show_edge_labels,
+                ),
+                width="stretch",
+            )
+        with live_cols[1]:
+            st.subheader("Current State")
+            st.write(f"Active red-team actions: {len(active_attack_list)}")
+            for label in active_attack_list or ["none"]:
+                st.write(f"- {label}")
+            st.write(f"Active blue-team defenses: {len(active_defense_list)}")
+            for label in active_defense_list or ["none"]:
+                st.write(f"- {label}")
+            st.write(f"Current retrieved nodes: {', '.join(defended['nodes']) if defended['nodes'] else 'none'}")
+            if result["defended_poison_exposure"]["matches"]:
+                st.warning("Live graph still exposes forbidden claims.")
+            else:
+                st.success("Live graph has no configured forbidden-claim exposure.")
 
-    timeline_cols = st.columns(2)
-    with timeline_cols[0]:
-        st.header("Red-Team Timeline")
-        if result["attacks"]:
-            st.dataframe(result["attacks"], width="stretch", hide_index=True)
-        else:
-            st.info("No attacks are currently enabled.")
-    with timeline_cols[1]:
-        st.header("Blue-Team Controls")
-        if result["defenses"]:
-            st.dataframe(result["defenses"], width="stretch", hide_index=True)
-        else:
-            st.info("No defenses are currently enabled.")
+    with duel_tab:
+        agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defenses, mock_answer, show_edge_labels)
 
-    context_cols = st.columns(3)
-    with context_cols[0]:
-        context_panel("Baseline retrieval", baseline)
-    with context_cols[1]:
-        context_panel("Red-team retrieval", adversarial)
-    with context_cols[2]:
-        context_panel("Blue-team retrieval", defended)
+    with graphs_tab:
+        st.header("Scenario Graphs")
+        st.caption("Use the sidebar graph selector to compare Baseline, Red team attack, and Blue team defended states.")
+        st.plotly_chart(
+            build_graph_figure(
+                graph_snapshot,
+                graph_title,
+                removed_edges=graph_removed_edges,
+                ground_truth_nodes=result["scenario"].get("ground_truth_nodes", []),
+                retrieved_nodes=graph_result["nodes"],
+                show_edge_labels=show_edge_labels,
+            ),
+            width="stretch",
+        )
 
-    st.header("Generated Answer Check")
-    st.write(result["answer"])
-    if result["poison_exposure"]["matches"]:
-        st.warning("Forbidden claims exposed: " + ", ".join(result["poison_exposure"]["matches"]))
-    else:
-        st.success("No configured forbidden claims appeared in the retrieved context.")
-    if result["defended_poison_exposure"]["matches"]:
-        st.warning("Defended context still exposes: " + ", ".join(result["defended_poison_exposure"]["matches"]))
-    else:
-        st.success("Blue-team defended context does not expose configured forbidden claims.")
+        table_cols = st.columns([1.4, 1])
+        with table_cols[0]:
+            st.subheader("Node map")
+            st.dataframe(
+                node_table(graph_snapshot, result["scenario"].get("ground_truth_nodes", []), graph_result["nodes"]),
+                width="stretch",
+                hide_index=True,
+            )
+        with table_cols[1]:
+            st.subheader("Edges")
+            st.dataframe(edge_table(graph_snapshot), width="stretch", hide_index=True)
 
-    with st.expander("Presenter notes"):
-        for note in scenario.get("presenter_notes", []):
-            st.write(f"- {note}")
+    with traces_tab:
+        timeline_cols = st.columns(2)
+        with timeline_cols[0]:
+            st.header("Red-Team Timeline")
+            if result["attacks"]:
+                st.dataframe(result["attacks"], width="stretch", hide_index=True)
+            else:
+                st.info("No attacks are currently enabled.")
+        with timeline_cols[1]:
+            st.header("Blue-Team Controls")
+            if result["defenses"]:
+                st.dataframe(result["defenses"], width="stretch", hide_index=True)
+            else:
+                st.info("No defenses are currently enabled.")
+
+        context_cols = st.columns(3)
+        with context_cols[0]:
+            context_panel("Baseline retrieval", baseline)
+        with context_cols[1]:
+            context_panel("Red-team retrieval", adversarial)
+        with context_cols[2]:
+            context_panel("Blue-team retrieval", defended)
+
+    with tests_tab:
+        expectation_panel(result)
 
 
 if __name__ == "__main__":

@@ -119,12 +119,12 @@ The app opens in your browser. Use the sidebar to:
 4. Toggle individual attacks.
 5. Toggle blue-team defenses.
 6. Switch between baseline, red-team, and blue-team graph states.
-7. Run the Agent Duel in rule-based or Hybrid Ollama mode.
+7. Run the Agent Duel in Agent-selected or Hybrid Ollama mode.
 8. Compare retrieval context, traces, metrics, and poison exposure.
 
 ## Optional local LLM duel setup
 
-The Agent Duel works without an LLM in **Rule-based** mode. For free local LLM rationales, install [Ollama](https://ollama.com/) and pull one small model:
+The Agent Duel works without an LLM in **Agent-selected** mode. In that mode, local agent logic chooses from the remaining scenario-approved red/blue options. For free local LLM action selection and rationales, install [Ollama](https://ollama.com/) and pull one small model:
 
 ```bash
 ollama pull qwen2.5:3b
@@ -141,7 +141,9 @@ In the Streamlit app:
 1. Open **Agent Duel**.
 2. Choose **Hybrid Ollama**.
 3. Keep the model as `qwen2.5:3b` or enter another local model.
-4. Click **Run one duel turn** or **Run full duel**.
+4. Click **Run next agent**, **Run next full turn**, or **Auto-play duel**.
+
+Use **Duel scope -> All scenarios** to run a full gauntlet across every built-in scenario in one pass.
 
 If Ollama is not running, the duel still works and falls back to rule-based rationales.
 
@@ -185,7 +187,7 @@ To experiment, edit the corpus or add a new scenario file and re-run the pipelin
 | `src/adversarial_module.py` | Query perturbation, edge cut, poison node + index update |
 | `src/evaluator.py` | Precision, recall, faithfulness heuristic |
 | `src/pipeline.py` | Scenario runner + terminal script (`python3 -m src.pipeline`) |
-| `src/agent_duel.py` | Rule-based and optional Ollama red/blue agent duel |
+| `src/agent_duel.py` | Agent-selected and optional Ollama red/blue agent duel |
 | `src/scenario_assertions.py` | Ground truth vs. outcome expectation checks |
 | `src/demo_app.py` | Interactive Streamlit demo |
 | `tests/scenario_tests.py` | Preflight runner for all scenarios |
