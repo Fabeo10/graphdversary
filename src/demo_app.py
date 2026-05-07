@@ -3,6 +3,7 @@ Interactive Streamlit demo for graphdversary.
 """
 
 from pathlib import Path
+import contextlib
 import random
 import sys
 import time
@@ -18,6 +19,7 @@ from src.pipeline import DEFAULT_SCENARIO_PATH, PROJECT_ROOT, load_scenario, run
 from src.agent_duel import (
     DEFAULT_OLLAMA_BLUE,
     DEFAULT_OLLAMA_RED,
+    duel_input_signature,
     run_agent_duel_steps,
 )
 from src.scenario_assertions import evaluate_expectations
@@ -532,6 +534,7 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
             st.session_state[autoplay_key] = False
             st.session_state[seed_key] = random.randint(1, 1_000_000)
             st.session_state.pop(gauntlet_key, None)
+            st.session_state.pop(session_key(scenario, "duel-checkpoint"), None)
 
     full_battle = st.columns([1, 4])
     with full_battle[0]:
@@ -579,20 +582,51 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         st.info("Switch Duel scope back to Current scenario to step through one live battle graph at a time.")
         return
 
-    duel = run_agent_duel_steps(
-        scenario_path=str(selected),
-        query=query,
-        top_k=top_k,
-        hop_depth=hop_depth,
-        attacks=duel_attacks,
-        defenses=duel_defenses,
-        mock_answer=mock_answer,
-        steps=st.session_state[step_key],
-        mode=mode,
-        ollama_model_red=ollama_model_red,
-        ollama_model_blue=ollama_model_blue,
-        seed=st.session_state[seed_key],
+    duel_ck_key = session_key(scenario, "duel-checkpoint")
+    duel_sig = duel_input_signature(
+        str(selected),
+        query,
+        top_k,
+        hop_depth,
+        duel_attacks,
+        duel_defenses,
+        mock_answer,
+        mode,
+        ollama_model_red,
+        ollama_model_blue,
+        str(st.session_state[seed_key]),
     )
+    prev_ck = st.session_state.get(duel_ck_key)
+    resume_cp = None
+    if (
+        prev_ck
+        and prev_ck.get("signature") == duel_sig
+        and prev_ck.get("completed_steps") == st.session_state[step_key] - 1
+    ):
+        resume_cp = prev_ck
+
+    spin_ctx = (
+        st.spinner("Hybrid Ollama: one agent step (incremental refresh)…")
+        if mode == "Hybrid Ollama"
+        else contextlib.nullcontext()
+    )
+    with spin_ctx:
+        duel = run_agent_duel_steps(
+            scenario_path=str(selected),
+            query=query,
+            top_k=top_k,
+            hop_depth=hop_depth,
+            attacks=duel_attacks,
+            defenses=duel_defenses,
+            mock_answer=mock_answer,
+            steps=st.session_state[step_key],
+            mode=mode,
+            ollama_model_red=ollama_model_red,
+            ollama_model_blue=ollama_model_blue,
+            seed=st.session_state[seed_key],
+            resume_checkpoint=resume_cp,
+        )
+    st.session_state[duel_ck_key] = duel["checkpoint"]
     duel_result = duel["result"]
     st.progress(duel["steps"] / duel["max_steps"] if duel["max_steps"] else 0.0)
     st.caption(
@@ -632,6 +666,10 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
 
     st.subheader("Agent Interaction Log")
     if duel["log"]:
+        st.caption(
+            "Hybrid Ollama adds **llm_*** columns: JSON prompt sent inside the generate payload and the model’s raw "
+            "text (expect JSON with option number). Rule-based fallback rows leave LLM cells empty."
+        )
         st.dataframe(duel["log"], width="stretch", hide_index=True)
     else:
         st.info("Run one duel turn to generate the first red/blue interaction.")
