@@ -510,6 +510,7 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     autoplay_key = session_key(scenario, "duel-autoplay")
     seed_key = session_key(scenario, "duel-seed")
     gauntlet_key = session_key(scenario, "duel-gauntlet")
+    play_until_key = session_key(scenario, "duel-play-until")
     if step_key not in st.session_state:
         st.session_state[step_key] = 0
     if autoplay_key not in st.session_state:
@@ -521,12 +522,15 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     controls = st.columns(4)
     with controls[0]:
         if st.button("Run next agent", disabled=st.session_state[step_key] >= max_steps):
+            st.session_state.pop(play_until_key, None)
             st.session_state[step_key] = min(st.session_state[step_key] + 1, max_steps)
     with controls[1]:
         if st.button("Run next full turn", disabled=st.session_state[step_key] >= max_steps):
+            st.session_state.pop(play_until_key, None)
             st.session_state[step_key] = min(st.session_state[step_key] + 2, max_steps)
     with controls[2]:
         if st.button("Auto-play duel", disabled=max_steps == 0 or st.session_state[step_key] >= max_steps):
+            st.session_state.pop(play_until_key, None)
             st.session_state[autoplay_key] = True
     with controls[3]:
         if st.button("Reset duel"):
@@ -535,20 +539,21 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
             st.session_state[seed_key] = random.randint(1, 1_000_000)
             st.session_state.pop(gauntlet_key, None)
             st.session_state.pop(session_key(scenario, "duel-checkpoint"), None)
+            st.session_state.pop(play_until_key, None)
 
     full_battle = st.columns([1, 4])
     with full_battle[0]:
         if st.button(
             "Run full battle",
-            disabled=max_steps == 0 or st.session_state[step_key] >= max_steps,
-            help="Jump straight to the last agent step: full battle log and end-state graph in one run.",
+            disabled=max_steps == 0,
+            help="Animates to the end one agent step per refresh so the graph updates live (same as rapid stepping).",
         ):
-            st.session_state[step_key] = max_steps
+            st.session_state[play_until_key] = max_steps
             st.session_state[autoplay_key] = False
     with full_battle[1]:
         st.caption(
-            "Demo shortcut: same duel as stepping to the end, without autoplay delays. "
-            "Hybrid Ollama still calls the models once per action, so a long pool may take a bit."
+            "Runs one duel step per Streamlit rerun until finished—needed so Hybrid Ollama and the plot render "
+            "between turns instead of blocking until the last step."
         )
 
     if duel_scope == "All scenarios":
@@ -597,13 +602,31 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         str(st.session_state[seed_key]),
     )
     prev_ck = st.session_state.get(duel_ck_key)
-    resume_cp = None
-    if (
-        prev_ck
-        and prev_ck.get("signature") == duel_sig
-        and prev_ck.get("completed_steps") == st.session_state[step_key] - 1
-    ):
-        resume_cp = prev_ck
+    sig_match = bool(prev_ck and prev_ck.get("signature") == duel_sig)
+    if not sig_match:
+        st.session_state.pop(duel_ck_key, None)
+        prev_ck = None
+
+    completed = int(prev_ck["completed_steps"]) if prev_ck else 0
+    play_until = st.session_state.get(play_until_key)
+    user_target = int(st.session_state[step_key])
+    catch_up_target = int(play_until) if play_until is not None else user_target
+
+    # At most one new agent step per rerun so the UI can render between Hybrid Ollama calls.
+    if prev_ck is None:
+        resume_cp = None
+        if play_until is not None:
+            effective_steps = min(completed + 1, catch_up_target)
+        elif user_target > 0:
+            effective_steps = min(completed + 1, catch_up_target)
+        else:
+            effective_steps = 0
+    elif completed < catch_up_target:
+        effective_steps = completed + 1
+        resume_cp = prev_ck if prev_ck.get("completed_steps") == effective_steps - 1 else None
+    else:
+        effective_steps = catch_up_target
+        resume_cp = prev_ck if prev_ck.get("completed_steps") == effective_steps - 1 else None
 
     spin_ctx = (
         st.spinner("Hybrid Ollama: one agent step (incremental refresh)…")
@@ -619,7 +642,7 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
             attacks=duel_attacks,
             defenses=duel_defenses,
             mock_answer=mock_answer,
-            steps=st.session_state[step_key],
+            steps=effective_steps,
             mode=mode,
             ollama_model_red=ollama_model_red,
             ollama_model_blue=ollama_model_blue,
@@ -627,6 +650,12 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
             resume_checkpoint=resume_cp,
         )
     st.session_state[duel_ck_key] = duel["checkpoint"]
+
+    done_steps = int(duel["checkpoint"]["completed_steps"])
+    if play_until is not None and done_steps >= play_until:
+        st.session_state.pop(play_until_key, None)
+        st.session_state[step_key] = play_until
+
     duel_result = duel["result"]
     st.progress(duel["steps"] / duel["max_steps"] if duel["max_steps"] else 0.0)
     st.caption(
@@ -680,6 +709,9 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
         st.rerun()
     elif st.session_state[autoplay_key]:
         st.session_state[autoplay_key] = False
+    elif done_steps < catch_up_target:
+        time.sleep(0.05)
+        st.rerun()
 
 
 def main():
