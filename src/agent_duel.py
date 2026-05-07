@@ -217,6 +217,19 @@ def _run_duel_state(scenario_path, query, top_k, hop_depth, attacks, defenses, m
     )
 
 
+def _duel_step_snapshot(step, agent, display_kind, result, action_label=""):
+    """
+    display_kind: baseline | attacked | defended — which graph/metrics slice to show for this moment.
+    """
+    return {
+        "step": step,
+        "agent": agent,
+        "display_kind": display_kind,
+        "action_label": action_label,
+        "result": result,
+    }
+
+
 def run_agent_duel_steps(
     scenario_path,
     query,
@@ -259,6 +272,10 @@ def run_agent_duel_steps(
         "available_options": f"{len(attacks)} attacks / {len(defenses)} defenses",
     })
 
+    snapshots = [
+        _duel_step_snapshot(0, "system", "baseline", final_result, "Baseline (no strikes yet)"),
+    ]
+
     current_agent = "baseline"
     for step in range(1, steps + 1):
         red_remaining = [index for index in range(len(attacks)) if index not in selected_attack_indices]
@@ -295,16 +312,18 @@ def run_agent_duel_steps(
                 selected_defense_indices,
             )
             action = attacks[selected_index]
+            label = action.get("label", action.get("type", "attack"))
             log.append({
                 "step": step,
                 "turn": (step + 1) // 2,
                 "agent": "red",
-                "action": action.get("label", action.get("type", "attack")),
+                "action": label,
                 "rationale": rationale,
                 "recall": final_result["adversarial"]["metrics"]["recall"],
                 "poison_exposure": final_result["poison_exposure"]["score"],
                 "available_options": ", ".join(option.get("label", option.get("type", "attack")) for option in options),
             })
+            snapshots.append(_duel_step_snapshot(step, "red", "attacked", final_result, label))
             current_agent = "red"
         elif blue_remaining:
             options = [defenses[index] for index in blue_remaining]
@@ -332,16 +351,18 @@ def run_agent_duel_steps(
                 selected_defense_indices,
             )
             action = defenses[selected_index]
+            label = action.get("label", action.get("type", "defense"))
             log.append({
                 "step": step,
                 "turn": step // 2,
                 "agent": "blue",
-                "action": action.get("label", action.get("type", "defense")),
+                "action": label,
                 "rationale": rationale,
                 "recall": final_result["defended"]["metrics"]["recall"],
                 "poison_exposure": final_result["defended_poison_exposure"]["score"],
                 "available_options": ", ".join(option.get("label", option.get("type", "defense")) for option in options),
             })
+            snapshots.append(_duel_step_snapshot(step, "blue", "defended", final_result, label))
             current_agent = "blue"
         else:
             break
@@ -356,6 +377,7 @@ def run_agent_duel_steps(
         "selected_defense_indices": selected_defense_indices,
         "log": log,
         "result": final_result,
+        "snapshots": snapshots,
     }
 
 

@@ -330,6 +330,38 @@ def edge_pairs(snapshot):
     return {(edge["source"], edge["target"]) for edge in snapshot["edges"]}
 
 
+def duel_snapshot_figure(snapshot, show_edge_labels):
+    """Plotly figure for one duel step (baseline, post-red attacked view, or post-blue defended view)."""
+    kind = snapshot["display_kind"]
+    result = snapshot["result"]
+    duel_removed_edges = {
+        (attack["source"], attack["target"])
+        for attack in result["attacks"]
+        if attack["type"] == "remove_edge" and attack["success"]
+    } - edge_pairs(result["defended_graph"])
+    gt = result["scenario"].get("ground_truth_nodes", [])
+    if kind == "baseline":
+        graph = result["baseline_graph"]
+        retr = result["baseline"]
+        title = f"Step {snapshot['step']} — Baseline"
+    elif kind == "attacked":
+        graph = result["attacked_graph"]
+        retr = result["adversarial"]
+        title = f"Step {snapshot['step']} — After red · {snapshot.get('action_label', '')}"
+    else:
+        graph = result["defended_graph"]
+        retr = result["defended"]
+        title = f"Step {snapshot['step']} — After blue · {snapshot.get('action_label', '')}"
+    return build_graph_figure(
+        graph,
+        title,
+        removed_edges=duel_removed_edges,
+        ground_truth_nodes=gt,
+        retrieved_nodes=retr["nodes"],
+        show_edge_labels=show_edge_labels,
+    )
+
+
 def session_key(scenario, suffix):
     return f"{scenario.get('id', 'scenario')}-{suffix}"
 
@@ -431,12 +463,19 @@ def global_action_pool(paths):
 def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defenses, mock_answer, show_edge_labels):
     st.header("Agent Duel")
     st.caption(
-        "Run a constrained red-team / blue-team duel. Agents choose from scenario-approved options; they never execute code or mutate the graph directly."
+        "Red picks from the attack list and blue from the defense list (combined across scenarios when using "
+        "**All scenario options**). Turns alternate starting with red; each step updates the timeline graphs below."
     )
 
     mode = st.radio("Agent mode", ["Agent-selected", "Hybrid Ollama"], horizontal=True)
     duel_scope = st.radio("Duel scope", ["Current scenario", "All scenarios"], horizontal=True)
-    action_pool = st.radio("Action pool", ["Current scenario options", "All scenario options"], horizontal=True)
+    action_pool = st.radio(
+        "Action pool",
+        ["Current scenario options", "All scenario options"],
+        horizontal=True,
+        index=1,
+        help="All scenario options merges every built-in scenario’s attacks and defenses so agents can choose any of them in turn.",
+    )
     ollama_model_red = DEFAULT_OLLAMA_RED
     ollama_model_blue = DEFAULT_OLLAMA_BLUE
     if mode == "Hybrid Ollama":
@@ -494,6 +533,21 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
             st.session_state[seed_key] = random.randint(1, 1_000_000)
             st.session_state.pop(gauntlet_key, None)
 
+    full_battle = st.columns([1, 4])
+    with full_battle[0]:
+        if st.button(
+            "Run full battle",
+            disabled=max_steps == 0 or st.session_state[step_key] >= max_steps,
+            help="Jump straight to the last agent step: full battle log and end-state graph in one run.",
+        ):
+            st.session_state[step_key] = max_steps
+            st.session_state[autoplay_key] = False
+    with full_battle[1]:
+        st.caption(
+            "Demo shortcut: same duel as stepping to the end, without autoplay delays. "
+            "Hybrid Ollama still calls the models once per action, so a long pool may take a bit."
+        )
+
     if duel_scope == "All scenarios":
         st.subheader("All-Scenario Duel Gauntlet")
         st.caption("Click once to run every built-in scenario. Results are stored until you reset or rerun the gauntlet.")
@@ -548,41 +602,28 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     st.caption(f"Duel seed: {st.session_state[seed_key]} (reset to generate a different path).")
     st.caption(f"Action pool: {len(duel_attacks)} attack options / {len(duel_defenses)} defense options.")
 
-    duel_cols = st.columns([1.2, 1])
-    with duel_cols[0]:
-        duel_removed_edges = {
-            (attack["source"], attack["target"])
-            for attack in duel_result["attacks"]
-            if attack["type"] == "remove_edge" and attack["success"]
-        } - edge_pairs(duel_result["defended_graph"])
-        if duel["current_agent"] == "red":
-            duel_graph = duel_result["attacked_graph"]
-            duel_retrieval = duel_result["adversarial"]
-            duel_title = "Duel graph after red action"
-        elif duel["current_agent"] == "blue":
-            duel_graph = duel_result["defended_graph"]
-            duel_retrieval = duel_result["defended"]
-            duel_title = "Duel graph after blue response"
-        else:
-            duel_graph = duel_result["baseline_graph"]
-            duel_retrieval = duel_result["baseline"]
-            duel_title = "Duel graph at baseline"
+    st.subheader("Battle timeline")
+    st.caption(
+        "One Plotly graph per step: baseline, then the attacked slice after each red action, then the defended slice "
+        "after each blue action. Advance **Run next agent** (or **Run full battle**) to grow this list."
+    )
+    for snap in duel.get("snapshots") or []:
+        st.markdown(
+            f"##### Step {snap['step']} · `{snap['agent']}` · {snap.get('action_label', '')}",
+        )
         st.plotly_chart(
-            build_graph_figure(
-                duel_graph,
-                duel_title,
-                removed_edges=duel_removed_edges,
-                ground_truth_nodes=duel_result["scenario"].get("ground_truth_nodes", []),
-                retrieved_nodes=duel_retrieval["nodes"],
-                show_edge_labels=show_edge_labels,
-            ),
+            duel_snapshot_figure(snap, show_edge_labels),
             width="stretch",
         )
-    with duel_cols[1]:
-        st.subheader("Duel Scoreboard")
+
+    sb_cols = st.columns([1, 1, 1, 1])
+    with sb_cols[0]:
         st.metric("Attack recall", f"{duel_result['adversarial']['metrics']['recall']:.2f}")
+    with sb_cols[1]:
         st.metric("Defended recall", f"{duel_result['defended']['metrics']['recall']:.2f}")
+    with sb_cols[2]:
         st.metric("Attack poison", f"{duel_result['poison_exposure']['score']:.2f}")
+    with sb_cols[3]:
         st.metric("Defended poison", f"{duel_result['defended_poison_exposure']['score']:.2f}")
 
     st.subheader("Agent Interaction Log")
