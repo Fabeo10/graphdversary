@@ -8,6 +8,7 @@ Each side only sees its role, allowed options, and published retrieval metrics (
 
 import hashlib
 import json
+import os
 import random
 import re
 import urllib.error
@@ -19,6 +20,11 @@ from src.pipeline import run_scenario
 # Default family split for adversarial realism: attacker vs defender use different weights.
 DEFAULT_OLLAMA_RED = "llama3.2:3b"
 DEFAULT_OLLAMA_BLUE = "qwen2.5:3b"
+
+# urllib deadline for each /api/generate call (seconds). Llama on CPU often exceeds 10s.
+# Override without code changes: export GRAPHDVERSARY_OLLAMA_TIMEOUT=180
+_OLLAMA_ENV_TIMEOUT = os.environ.get("GRAPHDVERSARY_OLLAMA_TIMEOUT", "").strip()
+OLLAMA_HTTP_TIMEOUT_SEC = float(_OLLAMA_ENV_TIMEOUT) if _OLLAMA_ENV_TIMEOUT else 120.0
 
 _ISOLATION_NOTE = (
     "Stateless single-turn: there is no shared chat history with the opposing agent's model; "
@@ -42,7 +48,9 @@ def _fallback_rationale(role, action):
     return f"Selected '{label}' from the allowed blue-team controls to respond to the current state."
 
 
-def _ollama_rationale(role, action, result, model, timeout=8):
+def _ollama_rationale(role, action, result, model, timeout=None):
+    if timeout is None:
+        timeout = max(30.0, OLLAMA_HTTP_TIMEOUT_SEC * 0.75)
     prompt = {
         "role": role,
         "simulation_policy": _ISOLATION_NOTE,
@@ -93,7 +101,9 @@ def _extract_json(text):
         return None
 
 
-def _ollama_choice(role, options, result, model, timeout=10):
+def _ollama_choice(role, options, result, model, timeout=None):
+    if timeout is None:
+        timeout = OLLAMA_HTTP_TIMEOUT_SEC
     """Call Ollama for JSON option pick; return trace dict (always) with ok flag and offsets when parsed."""
     prompt = {
         "role": role,
