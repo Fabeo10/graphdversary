@@ -6,11 +6,13 @@ session, context window, or coordinator passing one model the other's hidden cha
 Each side only sees its role, allowed options, and published retrieval metrics (environment).
 """
 
+import hashlib
 import json
 import random
 import re
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from src.pipeline import run_scenario
 
@@ -274,6 +276,14 @@ def _duel_step_snapshot(step, agent, display_kind, result, action_label=""):
     }
 
 
+def _action_pool_fingerprint(attacks, defenses):
+    """Stable hash so checkpoint signatures match across Streamlit reruns (dict order, etc.)."""
+    parts_a = sorted(json.dumps(a, sort_keys=True, default=str) for a in attacks)
+    parts_d = sorted(json.dumps(d, sort_keys=True, default=str) for d in defenses)
+    blob = ("A:" + "\n".join(parts_a) + "\nD:" + "\n".join(parts_d)).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
 def duel_input_signature(
     scenario_path,
     query,
@@ -287,22 +297,25 @@ def duel_input_signature(
     ollama_model_blue,
     seed,
 ):
+    path_obj = Path(scenario_path)
+    try:
+        scenario_norm = str(path_obj.resolve())
+    except OSError:
+        scenario_norm = str(path_obj)
     return json.dumps(
         {
-            "scenario_path": scenario_path,
-            "query": query,
-            "top_k": top_k,
-            "hop_depth": hop_depth,
-            "attacks": attacks,
-            "defenses": defenses,
-            "mock_answer": mock_answer,
+            "scenario_path": scenario_norm,
+            "query": (query or "").strip(),
+            "top_k": int(top_k),
+            "hop_depth": int(hop_depth),
+            "pool_fp": _action_pool_fingerprint(attacks, defenses),
+            "mock_answer": (mock_answer or "").strip(),
             "mode": mode,
-            "ollama_model_red": ollama_model_red,
-            "ollama_model_blue": ollama_model_blue,
-            "seed": seed,
+            "ollama_model_red": str(ollama_model_red),
+            "ollama_model_blue": str(ollama_model_blue),
+            "seed": str(seed),
         },
         sort_keys=True,
-        default=str,
     )
 
 

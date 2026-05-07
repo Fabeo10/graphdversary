@@ -511,6 +511,7 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     seed_key = session_key(scenario, "duel-seed")
     gauntlet_key = session_key(scenario, "duel-gauntlet")
     play_until_key = session_key(scenario, "duel-play-until")
+    catchup_runs_key = session_key(scenario, "duel-catchup-runs")
     if step_key not in st.session_state:
         st.session_state[step_key] = 0
     if autoplay_key not in st.session_state:
@@ -540,6 +541,7 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
             st.session_state.pop(gauntlet_key, None)
             st.session_state.pop(session_key(scenario, "duel-checkpoint"), None)
             st.session_state.pop(play_until_key, None)
+            st.session_state.pop(catchup_runs_key, None)
 
     full_battle = st.columns([1, 4])
     with full_battle[0]:
@@ -603,8 +605,10 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     )
     prev_ck = st.session_state.get(duel_ck_key)
     sig_match = bool(prev_ck and prev_ck.get("signature") == duel_sig)
-    if not sig_match:
+    if prev_ck and not sig_match:
+        st.warning("Duel inputs changed versus saved checkpoint—starting duel state over.")
         st.session_state.pop(duel_ck_key, None)
+        st.session_state.pop(catchup_runs_key, None)
         prev_ck = None
 
     completed = int(prev_ck["completed_steps"]) if prev_ck else 0
@@ -710,8 +714,21 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     elif st.session_state[autoplay_key]:
         st.session_state[autoplay_key] = False
     elif done_steps < catch_up_target:
-        time.sleep(0.05)
-        st.rerun()
+        runs = st.session_state.get(catchup_runs_key, 0) + 1
+        if runs > max_steps + 25:
+            st.session_state.pop(catchup_runs_key, None)
+            st.session_state.pop(duel_ck_key, None)
+            st.session_state.pop(play_until_key, None)
+            st.error(
+                "Catch-up stopped after too many refreshes (likely a signature/checkpoint mismatch). "
+                "Try **Reset duel** and run again — duel fingerprints are now stable across reruns."
+            )
+        else:
+            st.session_state[catchup_runs_key] = runs
+            time.sleep(0.05)
+            st.rerun()
+    else:
+        st.session_state.pop(catchup_runs_key, None)
 
 
 def main():
