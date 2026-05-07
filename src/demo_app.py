@@ -464,7 +464,7 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     st.header("Agent Duel")
     st.caption(
         "Red picks from the attack list and blue from the defense list (combined across scenarios when using "
-        "**All scenario options**). Turns alternate starting with red; each step updates the timeline graphs below."
+        "**All scenario options**). Turns alternate starting with red; each step refreshes the live graph above."
     )
 
     mode = st.radio("Agent mode", ["Agent-selected", "Hybrid Ollama"], horizontal=True)
@@ -602,28 +602,32 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     st.caption(f"Duel seed: {st.session_state[seed_key]} (reset to generate a different path).")
     st.caption(f"Action pool: {len(duel_attacks)} attack options / {len(duel_defenses)} defense options.")
 
-    st.subheader("Battle timeline")
-    st.caption(
-        "One Plotly graph per step: baseline, then the attacked slice after each red action, then the defended slice "
-        "after each blue action. Advance **Run next agent** (or **Run full battle**) to grow this list."
-    )
-    for snap in duel.get("snapshots") or []:
-        st.markdown(
-            f"##### Step {snap['step']} · `{snap['agent']}` · {snap.get('action_label', '')}",
+    st.subheader("Live duel graph")
+    snaps = duel.get("snapshots") or []
+    if snaps:
+        latest = snaps[-1]
+        st.caption(
+            f"Step **{latest['step']}** · `{latest['agent']}` · {latest.get('action_label', '')}. "
+            "The chart below **replaces in place** each time you advance a turn (or on auto-play reruns)—only the "
+            "interaction log grows underneath."
         )
-        st.plotly_chart(
-            duel_snapshot_figure(snap, show_edge_labels),
-            width="stretch",
-        )
+    else:
+        latest = None
 
-    sb_cols = st.columns([1, 1, 1, 1])
-    with sb_cols[0]:
+    duel_cols = st.columns([1.2, 1])
+    with duel_cols[0]:
+        if latest is not None:
+            st.plotly_chart(
+                duel_snapshot_figure(latest, show_edge_labels),
+                width="stretch",
+            )
+        else:
+            st.info("Advance the duel to render the graph.")
+    with duel_cols[1]:
+        st.markdown("**Scoreboard** (current pipeline state)")
         st.metric("Attack recall", f"{duel_result['adversarial']['metrics']['recall']:.2f}")
-    with sb_cols[1]:
         st.metric("Defended recall", f"{duel_result['defended']['metrics']['recall']:.2f}")
-    with sb_cols[2]:
         st.metric("Attack poison", f"{duel_result['poison_exposure']['score']:.2f}")
-    with sb_cols[3]:
         st.metric("Defended poison", f"{duel_result['defended_poison_exposure']['score']:.2f}")
 
     st.subheader("Agent Interaction Log")
