@@ -58,6 +58,35 @@ def graph_snapshot(kb):
     }
 
 
+def unrestored_remove_edge_attacks(result):
+    """Return ``{(source, target)}`` for ``remove_edge`` attacks that the blue
+    team has NOT (yet) restored — i.e. they still don't appear in
+    ``result["defended_graph"]``.
+
+    Used by the duel visualization to highlight which red-team edge removals are
+    still in effect, so the audience can see at a glance how much damage has
+    survived blue's defenses.
+
+    Returns an empty set when ``result`` has no attacks or no defended graph.
+    """
+    if not result:
+        return set()
+    defended_graph = result.get("defended_graph") or {}
+    defended_edges = {
+        (edge["source"], edge["target"])
+        for edge in defended_graph.get("edges", [])
+    }
+    attempted_removals = {
+        (attack["source"], attack["target"])
+        for attack in (result.get("attacks") or [])
+        if attack.get("type") == "remove_edge"
+        and attack.get("success")
+        and "source" in attack
+        and "target" in attack
+    }
+    return attempted_removals - defended_edges
+
+
 def evaluate_retrieval(retrieved_nodes, ground_truth_nodes):
     return {
         "precision": Evaluator.calculate_precision(retrieved_nodes, ground_truth_nodes),
@@ -240,10 +269,18 @@ def apply_defenses(kb, query, defenses, scenario):
     return defended_query, defense_log
 
 
-def calculate_poison_exposure(context, forbidden_claims):
-    """Estimate whether retrieved context exposes forbidden or poisoned claims."""
-    context_str = " ".join(context).lower()
-    matches = [claim for claim in forbidden_claims if claim.lower() in context_str]
+def calculate_poison_exposure(context, forbidden_claims, query=""):
+    """Estimate whether retrieved context **or the active query** exposes
+    forbidden or poisoned claims.
+
+    Query-perturbation attacks never write to the corpus, so a context-only
+    check returns 0 for them even when the malicious clause is sitting in the
+    prompt. Scanning the (adversarial or defended) query string alongside the
+    retrieved context lets the poison metric react to those attacks too, and
+    drop back to 0 after the blue-team sanitizer strips the clause.
+    """
+    haystack = (" ".join(context) + " " + (query or "")).lower()
+    matches = [claim for claim in forbidden_claims if claim.lower() in haystack]
     return {
         "matches": matches,
         "score": len(matches) / len(forbidden_claims) if forbidden_claims else 0.0,
@@ -288,15 +325,22 @@ def run_scenario(
     defended = run_retrieval(retriever, defended_query, top_k, hop_depth, ground_truth_nodes)
 
     answer = mock_answer or scenario.get("mock_answer", "")
-    faithfulness = Evaluator.calculate_faithfulness(answer, adversarial["context"])
+    forbidden_claims = scenario.get("forbidden_claims", [])
+    faithfulness = Evaluator.calculate_faithfulness(
+        answer, adversarial["context"], forbidden_terms=forbidden_claims
+    )
     poison_exposure = calculate_poison_exposure(
         adversarial["context"],
-        scenario.get("forbidden_claims", []),
+        forbidden_claims,
+        query=adversarial_query,
     )
-    defended_faithfulness = Evaluator.calculate_faithfulness(answer, defended["context"])
+    defended_faithfulness = Evaluator.calculate_faithfulness(
+        answer, defended["context"], forbidden_terms=forbidden_claims
+    )
     defended_poison_exposure = calculate_poison_exposure(
         defended["context"],
-        scenario.get("forbidden_claims", []),
+        forbidden_claims,
+        query=defended_query,
     )
 
     return {
