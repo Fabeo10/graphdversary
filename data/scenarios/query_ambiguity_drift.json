@@ -16,6 +16,10 @@
       "type": "perturb_query",
       "perturbation_type": "ambiguity",
       "label": "Add legacy database ambiguity"
+    },
+    {
+      "type": "benign_query",
+      "label": "Send normal user query about token verification"
     }
   ],
   "defenses": [
@@ -25,6 +29,10 @@
         "Also explain how this applies to legacy unencrypted databases."
       ],
       "label": "Remove off-topic legacy database clause"
+    },
+    {
+      "type": "no_op",
+      "label": "Monitor — no defensive action"
     }
   ],
   "mock_answer": "The Authentication Service verifies tokens through the JWT Validator, which fetches trusted public keys from KMS and enforces session policy.",

@@ -158,6 +158,15 @@ def apply_attacks(kb, query, attacks):
                 "perturbation_type": attack.get("perturbation_type", "contradiction"),
                 "success": True,
             })
+        elif attack_type == "benign_query":
+            # Non-malicious "attack": red sends a normal user query. No graph
+            # mutation, no query mutation — exercises blue's ability to recognize
+            # there is nothing to defend against.
+            attack_log.append({
+                "type": attack_type,
+                "label": attack.get("label", "Send normal user query"),
+                "success": True,
+            })
         else:
             attack_log.append({
                 "type": attack_type,
@@ -254,6 +263,15 @@ def apply_defenses(kb, query, defenses, scenario):
                 "label": defense.get("label", "Block forbidden claim nodes"),
                 "success": True,
                 "removed_nodes": removed_nodes,
+            })
+        elif defense_type == "no_op":
+            # Monitor-only stance: blue observes without intervening. The correct
+            # response to a benign red action; a costly false-negative against a
+            # real attack.
+            defense_log.append({
+                "type": defense_type,
+                "label": defense.get("label", "Monitor (no action)"),
+                "success": True,
             })
         else:
             defense_log.append({
