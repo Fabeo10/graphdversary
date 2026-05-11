@@ -606,35 +606,6 @@ def build_graph_figure(
     return figure
 
 
-def node_table(snapshot, ground_truth_nodes, retrieved_nodes):
-    ground_truth_nodes = set(ground_truth_nodes)
-    retrieved_nodes = set(retrieved_nodes)
-    return [
-        {
-            "#": index + 1,
-            "Node": display_name(node),
-            "ID": node["id"],
-            "Type": node.get("type", "generic"),
-            "Ground truth": node["id"] in ground_truth_nodes,
-            "Retrieved": node["id"] in retrieved_nodes,
-            "Content": content_preview(node.get("content", ""), 120),
-        }
-        for index, node in enumerate(snapshot["nodes"])
-    ]
-
-
-def edge_table(snapshot):
-    names = {node["id"]: display_name(node) for node in snapshot["nodes"]}
-    return [
-        {
-            "Source": names.get(edge["source"], edge["source"]),
-            "Relation": edge.get("relation", ""),
-            "Target": names.get(edge["target"], edge["target"]),
-        }
-        for edge in snapshot["edges"]
-    ]
-
-
 def edge_pairs(snapshot):
     return {(edge["source"], edge["target"]) for edge in snapshot["edges"]}
 
@@ -699,7 +670,9 @@ def run_all_scenario_duels(scenarios, mode, ollama_model_red, ollama_model_blue,
             "Type": scenario.get("test_type", "unspecified"),
             "Steps": duel["steps"],
             "Attack recall": f"{result['adversarial']['metrics']['recall']:.2f}",
+            "Attack precision": f"{result['adversarial']['metrics']['precision']:.2f}",
             "Defended recall": f"{result['defended']['metrics']['recall']:.2f}",
+            "Defended precision": f"{result['defended']['metrics']['precision']:.2f}",
             "Attack poison": f"{result['poison_exposure']['score']:.2f}",
             "Defended poison": f"{result['defended_poison_exposure']['score']:.2f}",
         })
@@ -995,7 +968,9 @@ def agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defen
     with duel_cols[1]:
         st.markdown("**Scoreboard** (current pipeline state)")
         st.metric("Attack recall", f"{duel_result['adversarial']['metrics']['recall']:.2f}")
+        st.metric("Attack precision", f"{duel_result['adversarial']['metrics']['precision']:.2f}")
         st.metric("Defended recall", f"{duel_result['defended']['metrics']['recall']:.2f}")
+        st.metric("Defended precision", f"{duel_result['defended']['metrics']['precision']:.2f}")
         st.metric("Attack poison", f"{duel_result['poison_exposure']['score']:.2f}")
         st.metric("Defended poison", f"{duel_result['defended_poison_exposure']['score']:.2f}")
 
@@ -1086,11 +1061,6 @@ def main():
     attacks, defenses = paired_controls(scenario)
 
     st.sidebar.header("Graph Controls")
-    graph_phase = st.sidebar.radio(
-        "Graph state",
-        ["Baseline", "Red team attack", "Blue team defended"],
-        index=1,
-    )
     show_edge_labels = st.sidebar.toggle("Show edge labels", value=False)
 
     with st.sidebar.expander("Mock answer"):
@@ -1132,24 +1102,38 @@ def main():
         "Graph legend: numbers map to the node table below; thick black outline = ground truth; larger marker = retrieved; dashed red edge = removed attack edge."
     )
 
-    metric_cols = st.columns(5)
+    metric_cols = st.columns(8)
     with metric_cols[0]:
         metric_card("Baseline recall", baseline["metrics"]["recall"])
     with metric_cols[1]:
+        metric_card("Baseline precision", baseline["metrics"]["precision"])
+    with metric_cols[2]:
         st.metric(
             "Attack recall",
             f"{adversarial['metrics']['recall']:.2f}",
             delta_label(baseline["metrics"]["recall"], adversarial["metrics"]["recall"]),
         )
-    with metric_cols[2]:
+    with metric_cols[3]:
+        st.metric(
+            "Attack precision",
+            f"{adversarial['metrics']['precision']:.2f}",
+            delta_label(baseline["metrics"]["precision"], adversarial["metrics"]["precision"]),
+        )
+    with metric_cols[4]:
         st.metric(
             "Defended recall",
             f"{defended['metrics']['recall']:.2f}",
             delta_label(adversarial["metrics"]["recall"], defended["metrics"]["recall"]),
         )
-    with metric_cols[3]:
+    with metric_cols[5]:
+        st.metric(
+            "Defended precision",
+            f"{defended['metrics']['precision']:.2f}",
+            delta_label(adversarial["metrics"]["precision"], defended["metrics"]["precision"]),
+        )
+    with metric_cols[6]:
         metric_card("Attack poison", result["poison_exposure"]["score"])
-    with metric_cols[4]:
+    with metric_cols[7]:
         st.metric(
             "Defended poison",
             f"{result['defended_poison_exposure']['score']:.2f}",
@@ -1157,19 +1141,12 @@ def main():
             delta_color="inverse",
         )
 
-    graph_config = {
-        "Baseline": (result["baseline_graph"], baseline, set(), "Baseline evidence graph"),
-        "Red team attack": (result["attacked_graph"], adversarial, removed_edges, "Red-team attacked graph"),
-        "Blue team defended": (result["defended_graph"], defended, set(), "Blue-team defended graph"),
-    }
-    graph_snapshot, graph_result, graph_removed_edges, graph_title = graph_config[graph_phase]
     active_attack_list = active_labels(attacks)
     active_defense_list = active_labels(defenses)
 
-    live_tab, duel_tab, graphs_tab = st.tabs([
+    live_tab, duel_tab = st.tabs([
         "Realtime Graph",
         "Agent Duel",
-        "Scenario Graphs",
     ])
 
     with live_tab:
@@ -1208,34 +1185,6 @@ def main():
 
     with duel_tab:
         agent_duel_panel(selected, scenario, query, top_k, hop_depth, attacks, defenses, mock_answer, show_edge_labels)
-
-    with graphs_tab:
-        st.header("Scenario Graphs")
-        st.caption("Use the sidebar graph selector to compare Baseline, Red team attack, and Blue team defended states.")
-        render_query_journey(result)
-        st.plotly_chart(
-            build_graph_figure(
-                graph_snapshot,
-                graph_title,
-                removed_edges=graph_removed_edges,
-                ground_truth_nodes=result["scenario"].get("ground_truth_nodes", []),
-                retrieved_nodes=graph_result["nodes"],
-                show_edge_labels=show_edge_labels,
-            ),
-            width="stretch",
-        )
-
-        table_cols = st.columns([1.4, 1])
-        with table_cols[0]:
-            st.subheader("Node map")
-            st.dataframe(
-                node_table(graph_snapshot, result["scenario"].get("ground_truth_nodes", []), graph_result["nodes"]),
-                width="stretch",
-                hide_index=True,
-            )
-        with table_cols[1]:
-            st.subheader("Edges")
-            st.dataframe(edge_table(graph_snapshot), width="stretch", hide_index=True)
 
 
 if __name__ == "__main__":
