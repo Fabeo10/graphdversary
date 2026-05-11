@@ -58,6 +58,15 @@ class AdversarialModule:
     def inject_poison_node(kb, target_node, malicious_content, poison_id=None):
         """Injects a malicious node into the topology and dynamic FAISS index."""
         poison_id = poison_id or f"malicious_{random.randint(1000,9999)}"
+
+        # Idempotency guard: if this poison id already exists, don't append a
+        # duplicate vector/index mapping for the same graph node.
+        if poison_id in kb.graph:
+            kb.graph.nodes[poison_id]["content"] = malicious_content
+            kb.graph.nodes[poison_id]["type"] = "adversarial"
+            if not kb.graph.has_edge(target_node, poison_id):
+                kb.graph.add_edge(target_node, poison_id, relation="REQUIRES_OVERRIDE")
+            return poison_id
         
         # 1. Update Topology
         kb.graph.add_node(poison_id, content=malicious_content, type="adversarial")
