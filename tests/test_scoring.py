@@ -5,13 +5,10 @@ Pins the contracts the demo's numeric metrics rely on. Two layers:
 
 1.  **Unit tests** of the pure scoring functions the demo *displays*:
 
+    * ``Evaluator.calculate_precision``     — retrieved precision vs. ground truth
     * ``Evaluator.calculate_recall``        — retrieved recall vs. ground truth
     * ``Evaluator.calculate_faithfulness``  — generated-answer support in context
     * ``pipeline.calculate_poison_exposure``— forbidden-claim fraction in context+query
-
-    ``Evaluator.calculate_precision`` is still computed by the pipeline (the
-    CLI ``run_pipeline`` prints it) but the Streamlit demo no longer displays
-    or relies on it — so it's not pinned here.
 
 2.  **Integration tests** for each scenario:
 
@@ -51,6 +48,25 @@ ALL_SCENARIOS = sorted(SCENARIO_DIR.glob("*.json"))
 # =============================================================================
 # Pure scoring math
 # =============================================================================
+
+
+class PrecisionTests(unittest.TestCase):
+    def test_empty_retrieved_returns_zero(self):
+        self.assertEqual(Evaluator.calculate_precision([], ["n1", "n2"]), 0.0)
+
+    def test_perfect_precision_returns_one(self):
+        self.assertEqual(Evaluator.calculate_precision(["n1", "n2"], ["n1", "n2"]), 1.0)
+
+    def test_partial_precision_fraction(self):
+        # 1 relevant out of 2 retrieved -> 0.5
+        self.assertEqual(Evaluator.calculate_precision(["n1", "n9"], ["n1", "n2"]), 0.5)
+
+    def test_duplicate_retrieved_nodes_do_not_penalize_precision(self):
+        # Set semantics in evaluator: retrieved unique = {n1}, precision = 1/1.
+        self.assertEqual(
+            Evaluator.calculate_precision(["n1", "n1", "n1"], ["n1", "n2"]),
+            1.0,
+        )
 
 
 class RecallTests(unittest.TestCase):
@@ -99,24 +115,25 @@ class RecallTests(unittest.TestCase):
 class EvaluateRetrievalTests(unittest.TestCase):
     """The pipeline wrapper that bundles retrieval metrics.
 
-    The demo currently displays only ``recall`` (``precision`` is still
-    emitted in the dict for the CLI ``run_pipeline`` print statement but is
-    intentionally not pinned here).  These tests guard the *wrapper
-    contract* — that the dict the pipeline returns continues to expose
-    ``recall`` correctly.
+    The demo displays both ``precision`` and ``recall``; these tests guard
+    the wrapper contract that both keys are exposed and computed correctly.
     """
 
-    def test_wrapper_returns_recall(self):
+    def test_wrapper_returns_precision_and_recall(self):
         out = evaluate_retrieval(["n1", "n2"], ["n1", "n2"])
+        self.assertIn("precision", out)
         self.assertIn("recall", out)
+        self.assertEqual(out["precision"], 1.0)
         self.assertEqual(out["recall"], 1.0)
 
-    def test_wrapper_partial_recall(self):
+    def test_wrapper_partial_precision_and_recall(self):
         out = evaluate_retrieval(["n1", "n9"], ["n1", "n2"])
+        self.assertAlmostEqual(out["precision"], 0.5)
         self.assertAlmostEqual(out["recall"], 0.5)
 
-    def test_wrapper_empty_retrieved_recall_zero(self):
+    def test_wrapper_empty_retrieved_precision_and_recall_zero(self):
         out = evaluate_retrieval([], ["n1", "n2"])
+        self.assertEqual(out["precision"], 0.0)
         self.assertEqual(out["recall"], 0.0)
 
 
