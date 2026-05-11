@@ -36,7 +36,9 @@ os.environ["GRAPHDVERSARY_AGENT_INTERACTION_LOG"] = "0"
 
 from src.agent_duel import (  # noqa: E402
     _ATTACK_TYPE_TO_COUNTER_DEFENSES,
+    _blue_options_for_round,
     _blue_defense_counters_last_red_attack,
+    _recent_blue_outcomes,
     duel_effective_max_steps,
     run_agent_duel_steps,
 )
@@ -149,6 +151,51 @@ class HitMissUnitTests(unittest.TestCase):
             duel_effective_max_steps([{"type": "a1"}, {"type": "a2"}], [{"type": "d"}]),
             4,
         )
+
+
+class BlueRoundOptionsUnitTests(unittest.TestCase):
+    """Round-time blue option pruning: remove two unlikely options, keep no_op."""
+
+    def test_keeps_no_op_for_benign_round(self):
+        attacks = [{"type": "benign_query"}]
+        defenses = [
+            {"type": "restore_protected_edges"},
+            {"type": "sanitize_query"},
+            {"type": "no_op"},
+        ]
+        idxs = _blue_options_for_round(attacks, defenses, [0])
+        remaining_types = [defenses[i]["type"] for i in idxs]
+        self.assertIn("no_op", remaining_types)
+        self.assertEqual(len(idxs), len(defenses) - 2)
+
+    def test_removes_two_unlikely_options_for_inject_poison(self):
+        attacks = [{"type": "inject_poison"}]
+        defenses = [
+            {"type": "restore_protected_edges"},
+            {"type": "remove_untrusted_nodes"},
+            {"type": "sanitize_query"},
+            {"type": "no_op"},
+        ]
+        idxs = _blue_options_for_round(attacks, defenses, [0])
+        remaining_types = [defenses[i]["type"] for i in idxs]
+        # remove_edge counter and query sanitizer are unlikely for inject_poison.
+        self.assertNotIn("restore_protected_edges", remaining_types)
+        self.assertNotIn("sanitize_query", remaining_types)
+        self.assertIn("remove_untrusted_nodes", remaining_types)
+        self.assertIn("no_op", remaining_types)
+
+
+class BlueRecentOutcomesUnitTests(unittest.TestCase):
+    def test_recent_outcomes_filtered_to_latest_attack_type(self):
+        log = [
+            {"agent": "blue", "attack_defense_types": "inject_poison · remove_untrusted_nodes", "blue_defense_result": "hit"},
+            {"agent": "blue", "attack_defense_types": "perturb_query · sanitize_query", "blue_defense_result": "hit"},
+            {"agent": "blue", "attack_defense_types": "inject_poison · block_forbidden_claim_nodes", "blue_defense_result": "hit"},
+        ]
+        out = _recent_blue_outcomes(log, latest_attack_type="inject_poison", limit=3)
+        self.assertEqual(len(out), 2)
+        for row in out:
+            self.assertEqual(row["attack_type"], "inject_poison")
 
 
 class HitMissIntegrationTests(unittest.TestCase):
