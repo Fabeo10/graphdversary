@@ -81,10 +81,5 @@
       "attacks_success": true,
       "defenses_success": true
     }
-  },
-  "presenter_notes": [
-    "Start with the baseline graph and point out that JWT Validator links to KMS and Session Policy.",
-    "Apply the edge removal first so the audience sees how topology changes the evidence path.",
-    "Inject the poison node last and compare retrieved context with the forbidden claims."
-  ]
+  }
 }

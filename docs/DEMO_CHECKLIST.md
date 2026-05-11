@@ -40,13 +40,13 @@ streamlit run src/demo_app.py
 | Step | What to do | What to say |
 |------|------------|-------------|
 | 1 | Sidebar: pick **Authentication Token Poisoning** (or walk all three). | “Hybrid GraphRAG: dense anchors + hop expansion on a small services graph.” |
-| 2 | **Overview** tab: read metrics row; mention **white-box** vs other scenarios. | “Ground truth nodes are defined in the scenario—not universal truth.” |
+| 2 | Read the **metrics row** above the tabs; mention **white-box** vs other scenarios. | “Ground truth nodes are defined in the scenario—not universal truth.” |
 | 3 | Sidebar: toggle **one red** attack; watch **attack recall** / poison. | “Structured tampering changes what retrieval surfaces.” |
 | 4 | Toggle **blue** defenses; compare **defended poison** and recall. | “Defenses are scenario-approved controls, not magic.” |
 | 5 | **Realtime Graph** or **Scenario Graphs:** switch **Baseline → Red → Blue**. | “Visual matches the same pipeline state as the metrics.” |
 | 6 | **Traces & Logs:** expand **Retrieval trace** for baseline vs attacked. | “Anchors and BFS hops explain *why* nodes appeared.” |
 | 7 | **Tests** tab: show preflight expectations for current toggles. | “Scenario expectations encode the teaching point.” |
-| 8 | **Agent Duel** (optional): **Agent-selected** first; then **Hybrid Ollama** if available. | “Agents only choose among scenario actions—no arbitrary graph writes.” |
+| 8 | **Agent Duel** (optional): **Run full battle** for a one-click complete log and end-state graph, or **Agent-selected** / **Hybrid Ollama** with stepping. | “Agents only choose among scenario actions—no arbitrary graph writes.” |
 | 9 | Closing | Point to `docs/PROJECT_BRIEF.md` for threat model and limitations. |
 
 ## If something breaks

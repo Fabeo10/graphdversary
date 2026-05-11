@@ -48,10 +48,5 @@
       "attacks_success": true,
       "defenses_success": true
     }
-  },
-  "presenter_notes": [
-    "This is black-box because the adversary only edits the query.",
-    "Show how top-k and hop depth influence whether irrelevant nodes enter context.",
-    "Turn the query sanitizer on and off to compare the retrieval trace."
-  ]
+  }
 }

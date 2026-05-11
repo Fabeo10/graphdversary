@@ -192,7 +192,6 @@ Scenario files live in `data/scenarios/`. A scenario points at a corpus and defi
 - **`mock_answer`:** answer text used for the faithfulness check
 - **`forbidden_claims`:** claims that should not appear in retrieved context
 - **`expected_outcomes`:** pass/fail thresholds for demo preflight checks
-- **`presenter_notes`:** talking points for the demo
 
 To experiment, edit the corpus or add a new scenario file and re-run the pipeline or Streamlit app. Then run `python scripts/generate_project_docs.py` so [docs/DATASET_AND_SCENARIOS.md](docs/DATASET_AND_SCENARIOS.md) stays current.
 

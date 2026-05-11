@@ -62,10 +62,5 @@
       "attacks_success": true,
       "defenses_success": true
     }
-  },
-  "presenter_notes": [
-    "This is gray-box because the adversary knows enough architecture to target the gateway path.",
-    "Toggle forbidden-claim blocking to show the blue-team cleanup.",
-    "Use the graph to show that gateway traffic should delegate to the Authentication Service."
-  ]
+  }
 }

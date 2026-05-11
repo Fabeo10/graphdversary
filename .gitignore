@@ -28,6 +28,10 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Overwritten each Agent Duel run (see src/agent_duel.py)
+logs/agent_interaction_log.json
+logs/agent_interaction_log.json.tmp
+
 # Tooling & test caches
 .pytest_cache/
 .mypy_cache/
